@@ -237,7 +237,8 @@ function FormRow({ label, children }) {
   return <div style={{ marginBottom: 8 }}><label style={{ display: "block", fontSize: 12, color: "var(--muted)", marginBottom: 3 }}>{label}</label>{children}</div>;
 }
 
-function PersonCard({ p, persons, canEditFn, onEdit, onAddChild, onAddSpouse, highlight }) {
+function PersonCard({ p, persons, canEditFn, onEdit, onAddChild, onAddSpouse, onAddParent, rootIdsSet, highlight }) {
+  const isRoot = rootIdsSet && rootIdsSet.has(p.id);
   const spouses = (p.spouseIds || []).map((id) => persons[id]).filter(Boolean);
   const isHit = highlight && p.name.includes(highlight);
   const canEdit = canEditFn(p.id);
@@ -265,9 +266,10 @@ function PersonCard({ p, persons, canEditFn, onEdit, onAddChild, onAddSpouse, hi
         </div>
       )}
       {canEdit && (
-        <div style={{ display: "flex", gap: 6, marginTop: 8 }}>
+        <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
           <button onClick={() => onAddSpouse(p.id)} style={miniBtnStyle}>＋配偶</button>
           <button onClick={() => onAddChild(p.id)} style={miniBtnStyle}>＋子女</button>
+          {isRoot && onAddParent && <button onClick={() => onAddParent(p.id)} style={{ ...miniBtnStyle, borderColor: "var(--jade)", color: "var(--jade)" }}>＋上一代</button>}
         </div>
       )}
     </div>
@@ -353,6 +355,64 @@ function PersonForm({ mode, initial, onCancel, onSave, onDelete }) {
             <button onClick={onCancel} style={miniBtnStyle}>取消</button>
             <button onClick={() => onSave(f)} style={{ ...miniBtnStyle, background: "var(--seal)", color: "var(--paper)", borderColor: "var(--seal)" }}>✓ 儲存</button>
           </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AddParentForm({ otherRoots, onCancel, onCreateNew, onAttachExisting }) {
+  const [mode, setMode] = useState("new"); // "new" | "existing"
+  const [f, setF] = useState({ name: "", gender: "M", birthAdYear: null, birthEra: "", birthLunar: "", birthHour: "", deathNote: "", note: "", generationEra: "" });
+  const [existingId, setExistingId] = useState("");
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+
+  return (
+    <div style={overlayStyle}>
+      <div style={modalStyle}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <h3 style={{ fontFamily: "var(--font-display)", fontSize: 18, margin: 0 }}>新增上一代</h3>
+          <button onClick={onCancel} style={iconBtnStyle}>✕</button>
+        </div>
+
+        <FormRow label="方式">
+          <select style={inputStyle} value={mode} onChange={(e) => setMode(e.target.value)}>
+            <option value="new">建立一位新的上一代祖先</option>
+            {otherRoots.length > 0 && <option value="existing">歸到現有某位「頂層祖先」底下（例如：跟另一房是兄弟，共用同一位父親）</option>}
+          </select>
+        </FormRow>
+
+        {mode === "existing" ? (
+          <FormRow label="選擇要歸屬的頂層祖先">
+            <select style={inputStyle} value={existingId} onChange={(e) => setExistingId(e.target.value)}>
+              <option value="">請選擇</option>
+              {otherRoots.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </FormRow>
+        ) : (
+          <React.Fragment>
+            <FormRow label="姓名"><input style={inputStyle} value={f.name} onChange={set("name")} /></FormRow>
+            <FormRow label="性別">
+              <select style={inputStyle} value={f.gender} onChange={set("gender")}><option value="M">男</option><option value="F">女</option></select>
+            </FormRow>
+            <FormRow label="西元出生年"><input style={inputStyle} type="number" value={f.birthAdYear || ""} onChange={(e) => setF({ ...f, birthAdYear: e.target.value ? Number(e.target.value) : null })} /></FormRow>
+            <FormRow label="朝代干支年"><input style={inputStyle} placeholder="例：清光緒己亥年（25年）" value={f.birthEra || ""} onChange={set("birthEra")} /></FormRow>
+            <FormRow label="農曆日期"><input style={inputStyle} placeholder="例：2月28日" value={f.birthLunar || ""} onChange={set("birthLunar")} /></FormRow>
+            <FormRow label="時辰"><input style={inputStyle} placeholder="例：戌時" value={f.birthHour || ""} onChange={set("birthHour")} /></FormRow>
+            <FormRow label="卒亡／享壽備註"><input style={inputStyle} placeholder="例：享壽61歲" value={f.deathNote || ""} onChange={set("deathNote")} /></FormRow>
+            <FormRow label="其他備註"><input style={inputStyle} value={f.note || ""} onChange={set("note")} /></FormRow>
+            <FormRow label="世代分組標題（顯示於樹狀圖／清單最上方）"><input style={inputStyle} placeholder="例：清朝 1870年（同治己巳年）" value={f.generationEra || ""} onChange={set("generationEra")} /></FormRow>
+          </React.Fragment>
+        )}
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+          <button onClick={onCancel} style={miniBtnStyle}>取消</button>
+          <button
+            onClick={() => (mode === "new" ? onCreateNew(f) : existingId && onAttachExisting(existingId))}
+            style={{ ...miniBtnStyle, background: "var(--seal)", color: "var(--paper)", borderColor: "var(--seal)" }}
+          >
+            ✓ 儲存
+          </button>
         </div>
       </div>
     </div>
@@ -628,6 +688,7 @@ function App() {
   const openEdit = (personId) => setFormState({ mode: "edit", personId });
   const openAddSpouse = (personId) => setFormState({ mode: "spouse", personId, initial: { name: "", gender: "F", birthAdYear: null, birthEra: "", birthLunar: "", birthHour: "", deathNote: "", note: "", spouseType: "配偶" } });
   const openAddChild = (personId) => setFormState({ mode: "child", personId, initial: { name: "", gender: "M", birthAdYear: null, birthEra: "", birthLunar: "", birthHour: "", deathNote: "", note: "" } });
+  const openAddParent = (personId) => setFormState({ mode: "parent", personId });
 
   const handleSaveForm = async (f) => {
     const newPersons = { ...persons };
@@ -653,6 +714,32 @@ function App() {
     delete newPersons[id];
     Object.values(newPersons).forEach((p) => { if ((p.spouseIds || []).includes(id)) p.spouseIds = p.spouseIds.filter((s) => s !== id); });
     const newRootIds = rootIds.filter((r) => r !== id);
+    await persistAll(newPersons, newRootIds, null);
+    setFormState(null);
+  };
+
+  // 新增上一代：建立全新的祖先，原本這個根節點變成新祖先的子女
+  const handleCreateNewAncestor = async (f) => {
+    const currentRootId = formState.personId;
+    const newAncestorId = uid();
+    const newPersons = { ...persons };
+    newPersons[newAncestorId] = {
+      id: newAncestorId, name: f.name, gender: f.gender, parentId: null, childOrder: 0,
+      birthAdYear: f.birthAdYear, birthEra: f.birthEra, birthLunar: f.birthLunar, birthHour: f.birthHour,
+      deathNote: f.deathNote, note: f.note, spouseIds: [], generationEra: f.generationEra || "",
+    };
+    newPersons[currentRootId] = { ...newPersons[currentRootId], parentId: newAncestorId };
+    const newRootIds = rootIds.map((id) => (id === currentRootId ? newAncestorId : id));
+    await persistAll(newPersons, newRootIds, null);
+    setFormState(null);
+  };
+
+  // 新增上一代：歸到現有的另一位頂層祖先底下（例如兩房是兄弟，共用同一父親）
+  const handleAttachExistingAncestor = async (existingAncestorId) => {
+    const currentRootId = formState.personId;
+    const newPersons = { ...persons };
+    newPersons[currentRootId] = { ...newPersons[currentRootId], parentId: existingAncestorId };
+    const newRootIds = rootIds.filter((id) => id !== currentRootId);
     await persistAll(newPersons, newRootIds, null);
     setFormState(null);
   };
@@ -693,6 +780,8 @@ function App() {
 
   const toggleTreeNode = (id) => setCollapsed((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const toggleListNode = (id) => setExpanded((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  const rootIdsSet = useMemo(() => new Set(rootIds), [rootIds]);
 
   const rootsByEra = useMemo(() => {
     if (!persons) return [];
@@ -770,7 +859,7 @@ function App() {
               <div key={root.id}>
                 <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8, fontFamily: "var(--font-display)" }}>{root.generationEra}</div>
                 <div style={{ overflowX: "auto", paddingBottom: 8 }}>
-                  <TreeNode id={root.id} persons={persons} collapsed={collapsed} toggle={toggleTreeNode} onEdit={openEdit} onAddChild={openAddChild} onAddSpouse={openAddSpouse} canEditFn={canEditPerson} highlight={search.trim()} />
+                  <TreeNode id={root.id} persons={persons} collapsed={collapsed} toggle={toggleTreeNode} onEdit={openEdit} onAddChild={openAddChild} onAddSpouse={openAddSpouse} onAddParent={openAddParent} rootIdsSet={rootIdsSet} canEditFn={canEditPerson} highlight={search.trim()} />
                 </div>
               </div>
             ))}
@@ -781,14 +870,22 @@ function App() {
             {rootsByEra.map((root) => (
               <div key={root.id} style={{ marginBottom: 20 }}>
                 <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 4, fontFamily: "var(--font-display)" }}>{root.generationEra}</div>
-                <ListNode id={root.id} persons={persons} depth={0} expanded={expanded} toggle={toggleListNode} onEdit={openEdit} onAddChild={openAddChild} onAddSpouse={openAddSpouse} canEditFn={canEditPerson} highlight={search.trim()} />
+                <ListNode id={root.id} persons={persons} depth={0} expanded={expanded} toggle={toggleListNode} onEdit={openEdit} onAddChild={openAddChild} onAddSpouse={openAddSpouse} onAddParent={openAddParent} rootIdsSet={rootIdsSet} canEditFn={canEditPerson} highlight={search.trim()} />
               </div>
             ))}
           </div>
         )}
       </main>
 
-      {formState && (
+      {formState && formState.mode === "parent" && (
+        <AddParentForm
+          otherRoots={rootIds.filter((id) => id !== formState.personId).map((id) => persons[id]).filter(Boolean)}
+          onCancel={() => setFormState(null)}
+          onCreateNew={handleCreateNewAncestor}
+          onAttachExisting={handleAttachExistingAncestor}
+        />
+      )}
+      {formState && formState.mode !== "parent" && (
         <PersonForm mode={formState.mode} initial={formState.initial || persons[formState.personId]} onCancel={() => setFormState(null)} onSave={handleSaveForm} onDelete={formState.mode === "edit" ? handleDeletePerson : null} />
       )}
       {showManage && roles && (
