@@ -322,9 +322,19 @@ function ListNode({ id, persons, depth, expanded, toggle, ...actions }) {
   );
 }
 
-function PersonForm({ mode, initial, onCancel, onSave, onDelete }) {
+function PersonForm({ mode, initial, onCancel, onSave, onDelete, allPersons, personId }) {
   const [f, setF] = useState(initial);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const isSpouseRecord = !!f.spouseOf;
+
+  const parentOptions = useMemo(() => {
+    if (mode !== "edit" || isSpouseRecord || !allPersons || !personId) return [];
+    const excluded = getDescendantIds(allPersons, personId); // 排除自己與所有子孫（避免造成循環）
+    return Object.values(allPersons)
+      .filter((p) => !excluded.has(p.id) && !p.spouseOf)
+      .sort((a, b) => a.name.localeCompare(b.name, "zh-Hant"));
+  }, [allPersons, personId, mode, isSpouseRecord]);
+
   return (
     <div style={overlayStyle}>
       <div style={modalStyle}>
@@ -340,6 +350,14 @@ function PersonForm({ mode, initial, onCancel, onSave, onDelete }) {
           <FormRow label="配偶關係">
             <select style={inputStyle} value={f.spouseType || "配偶"} onChange={set("spouseType")}>
               <option value="配偶">配偶</option><option value="原配">原配</option><option value="繼配">繼配</option>
+            </select>
+          </FormRow>
+        )}
+        {mode === "edit" && !isSpouseRecord && (
+          <FormRow label="上層（父親）">
+            <select style={inputStyle} value={f.parentId || ""} onChange={(e) => setF({ ...f, parentId: e.target.value || null })}>
+              <option value="">（設為頂層祖先，不隸屬任何人）</option>
+              {parentOptions.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
           </FormRow>
         )}
@@ -692,8 +710,19 @@ function App() {
 
   const handleSaveForm = async (f) => {
     const newPersons = { ...persons };
+    let newRootIds = rootIds;
     if (formState.mode === "edit") {
-      newPersons[formState.personId] = { ...newPersons[formState.personId], ...f };
+      const oldParentId = persons[formState.personId].parentId || null;
+      const newParentId = f.parentId || null;
+      newPersons[formState.personId] = { ...newPersons[formState.personId], ...f, parentId: newParentId };
+      if (newParentId !== oldParentId) {
+        const isCurrentlyRoot = rootIds.includes(formState.personId);
+        if (newParentId === null && !isCurrentlyRoot) {
+          newRootIds = [...rootIds, formState.personId];
+        } else if (newParentId !== null && isCurrentlyRoot) {
+          newRootIds = rootIds.filter((id) => id !== formState.personId);
+        }
+      }
     } else if (formState.mode === "spouse") {
       const spouseId = uid();
       newPersons[spouseId] = { id: spouseId, name: f.name, gender: f.gender, parentId: null, childOrder: 0, birthAdYear: f.birthAdYear, birthEra: f.birthEra, birthLunar: f.birthLunar, birthHour: f.birthHour, deathNote: f.deathNote, note: f.note, spouseIds: [formState.personId], spouseType: f.spouseType, spouseOf: formState.personId };
@@ -703,7 +732,7 @@ function App() {
       const siblingCount = Object.values(persons).filter((p) => p.parentId === formState.personId).length;
       newPersons[childId] = { id: childId, name: f.name, gender: f.gender, parentId: formState.personId, childOrder: siblingCount, birthAdYear: f.birthAdYear, birthEra: f.birthEra, birthLunar: f.birthLunar, birthHour: f.birthHour, deathNote: f.deathNote, note: f.note, spouseIds: [] };
     }
-    await persistAll(newPersons, null, null);
+    await persistAll(newPersons, newRootIds, null);
     setFormState(null);
   };
   const handleDeletePerson = async () => {
@@ -886,7 +915,7 @@ function App() {
         />
       )}
       {formState && formState.mode !== "parent" && (
-        <PersonForm mode={formState.mode} initial={formState.initial || persons[formState.personId]} onCancel={() => setFormState(null)} onSave={handleSaveForm} onDelete={formState.mode === "edit" ? handleDeletePerson : null} />
+        <PersonForm mode={formState.mode} initial={formState.initial || persons[formState.personId]} onCancel={() => setFormState(null)} onSave={handleSaveForm} onDelete={formState.mode === "edit" ? handleDeletePerson : null} allPersons={persons} personId={formState.personId} />
       )}
       {showManage && roles && (
         <ManagePanel roles={roles} persons={persons} fileId={CONFIG.FILE_ID} accessToken={accessToken} onClose={() => setShowManage(false)} onAddRole={handleAddRole} onRemoveRole={handleRemoveRole} />
