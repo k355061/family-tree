@@ -178,6 +178,27 @@ function getDescendantIds(persons, rootId) {
   Object.values(persons).forEach((p) => { if (out.has(p.id)) (p.spouseIds || []).forEach((sid) => out.add(sid)); });
   return out;
 }
+function computeDefaultCollapsed(persons, rootIds) {
+  // 預設只展開到孫子輩（depth 0=公, 1=子女, 2=孫），depth>=2 的節點如果有子女就先收合，
+  // 避免某一房資料筆數變多時，樹狀圖一開始就撐得太寬、把同輩的其他人擠出視野。
+  const out = new Set();
+  const visit = (id, depth) => {
+    const children = Object.values(persons).filter((c) => c.parentId === id);
+    if (depth >= 2 && children.length > 0) out.add(id);
+    children.forEach((c) => visit(c.id, depth + 1));
+  };
+  rootIds.forEach((rid) => visit(rid, 0));
+  return out;
+}
+function getAncestorChain(persons, id) {
+  const chain = [];
+  let cur = persons[id];
+  while (cur && cur.parentId) {
+    chain.push(cur.parentId);
+    cur = persons[cur.parentId];
+  }
+  return chain;
+}
 function roleLabel(role) {
   if (role === "master") return "主管理者";
   if (role === "sub") return "副管理者";
@@ -259,7 +280,7 @@ function TreeNode({ id, persons, collapsed, toggle, ...actions }) {
   const children = Object.values(persons).filter((c) => c.parentId === id).sort((a, b) => a.childOrder - b.childOrder);
   const isCollapsed = collapsed.has(id);
   return (
-    <div style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+    <div data-person-id={id} style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         {children.length > 0 && <button onClick={() => toggle(id)} style={{ ...iconBtnStyle, color: "var(--gold)" }}>{isCollapsed ? "▶" : "▼"}</button>}
         <PersonCard p={p} persons={persons} {...actions} />
@@ -539,9 +560,12 @@ function App() {
         const data = accessToken
           ? await driveReadAuthed(CONFIG.FILE_ID, accessToken)
           : await driveReadPublic(CONFIG.FILE_ID);
-        setPersons(data.persons);
-        setRootIds(data.rootIds);
-        setRoles(data.roles || { masterEmail: null, admins: [], nodeAdmins: [] });
+        const safePersons = data && data.persons ? data.persons : {};
+        const safeRootIds = data && data.rootIds ? data.rootIds : [];
+        setPersons(safePersons);
+        setRootIds(safeRootIds);
+        setRoles((data && data.roles) || { masterEmail: null, admins: [], nodeAdmins: [] });
+        setCollapsed(computeDefaultCollapsed(safePersons, safeRootIds));
       } catch (e) {
         setLoadErr("讀取家族資料失敗：" + e.message);
       } finally {
@@ -633,6 +657,40 @@ function App() {
     setFormState(null);
   };
 
+  // 搜尋時：自動展開比對到的人物的所有祖先節點，並捲動到該卡片
+  useEffect(() => {
+    const term = search.trim();
+    if (!term || !persons) return;
+    const matches = Object.values(persons).filter((p) => p.name.includes(term));
+    if (matches.length === 0) return;
+    const ancestorIds = new Set();
+    matches.forEach((m) => getAncestorChain(persons, m.id).forEach((id) => ancestorIds.add(id)));
+    if (ancestorIds.size > 0) {
+      setCollapsed((prev) => {
+        const n = new Set(prev);
+        ancestorIds.forEach((id) => n.delete(id));
+        return n;
+      });
+      setExpanded((prev) => {
+        const n = new Set(prev);
+        ancestorIds.forEach((id) => n.add(id));
+        return n;
+      });
+    }
+    const t = setTimeout(() => {
+      const el = document.querySelector(`[data-person-id="${matches[0].id}"]`);
+      if (el) el.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+    }, 150);
+    return () => clearTimeout(t);
+  }, [search, persons]);
+
+  const expandAll = () => setCollapsed(new Set());
+  const collapseAll = () => {
+    if (!persons) return;
+    const all = new Set(Object.values(persons).filter((p) => Object.values(persons).some((c) => c.parentId === p.id)).map((p) => p.id));
+    setCollapsed(all);
+  };
+
   const toggleTreeNode = (id) => setCollapsed((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const toggleListNode = (id) => setExpanded((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
@@ -694,6 +752,12 @@ function App() {
           <button onClick={() => setViewMode("tree")} style={{ ...miniBtnStyle, background: viewMode === "tree" ? "var(--seal)" : "transparent", color: viewMode === "tree" ? "var(--paper)" : "var(--ink)" }}>樹狀圖</button>
           <button onClick={() => setViewMode("list")} style={{ ...miniBtnStyle, background: viewMode === "list" ? "var(--seal)" : "transparent", color: viewMode === "list" ? "var(--paper)" : "var(--ink)" }}>世代清單</button>
         </div>
+        {viewMode === "tree" && (
+          <div style={{ display: "flex", gap: 4 }}>
+            <button onClick={expandAll} style={miniBtnStyle}>展開全部</button>
+            <button onClick={collapseAll} style={miniBtnStyle}>收合全部</button>
+          </div>
+        )}
         <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, minWidth: 160 }}>
           <input style={{ ...inputStyle, maxWidth: 220 }} placeholder="搜尋姓名…" value={search} onChange={(e) => setSearch(e.target.value)} />
         </div>
