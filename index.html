@@ -27,7 +27,7 @@
 <body>
 <div id="root"></div>
 
-<script type="text/babel" data-presets="react">
+<script type="text/plain" id="app-source">
 const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
 /* ===========================================================
@@ -738,7 +738,30 @@ function App() {
   );
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(<App />);
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
+</script>
+
+<script>
+  // 手動轉譯上方原始碼，強制使用「classic」JSX 轉換模式（React.createElement），
+  // 避免新版 Babel 預設的「automatic」模式插入 import 陳述式，
+  // 因為這段程式碼是在瀏覽器裡以純 <script> 執行，並非模組（module），不支援 import。
+  (function () {
+    var source = document.getElementById("app-source").textContent;
+    try {
+      var output = Babel.transform(source, {
+        presets: [["react", { runtime: "classic" }]],
+      }).code;
+      var script = document.createElement("script");
+      script.textContent = output;
+      document.body.appendChild(script);
+    } catch (e) {
+      document.getElementById("root").innerHTML =
+        '<div style="padding:40px;color:#9B2E23;font-family:sans-serif;">程式碼編譯失敗：' +
+        (e && e.message ? e.message : String(e)) +
+        "</div>";
+      console.error(e);
+    }
+  })();
 </script>
 </body>
 </html>
