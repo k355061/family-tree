@@ -1,0 +1,1135 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>家族樹狀圖</title>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif+TC:wght@600;700;900&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --paper: #EDE6D3; --card: #F6F1E4; --ink: #241F1A;
+    --seal: #9B2E23; --jade: #3F5D52; --gold: #A8823C; --muted: #7C7264;
+    --font-display: 'Noto Serif TC', 'Noto Serif SC', serif;
+    --font-body: 'Noto Sans TC', 'Noto Sans SC', sans-serif;
+    --font-num: Georgia, 'Times New Roman', serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--paper); color: var(--ink); font-family: var(--font-body); }
+  button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--seal); outline-offset: 2px; }
+  button { font-family: var(--font-body); }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/plain" id="app-source">
+const { useState, useEffect, useMemo, useCallback, useRef } = React;
+
+/* ===========================================================
+   ★★★ 部署設定 —— 請依照說明填入你自己的值 ★★★
+   =========================================================== */
+const CONFIG = {
+  CLIENT_ID: "743704493577-di6eirt7fvjtldjt7k3mnoqokrtptuas.apps.googleusercontent.com",
+  API_KEY: "AIzaSyAb1yRz2BK242x8Lm37WJBjNoc_BnViucg",
+  // 第一次部署時留空；用主管理者身份登入後，畫面會引導你建立資料檔案，
+  // 建立完成後把顯示出來的 File ID 貼在這裡，然後重新推上 GitHub。
+  FILE_ID: "1kes6aBUs7FFNHuCnWSzCP3ro1386abto",
+  SCOPES: "https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/userinfo.email",
+};
+
+/* ===========================================================
+   資料模型（與先前版本相同）
+   person: { id, name, gender, parentId, childOrder,
+             birthAdYear, birthEra, birthLunar, birthHour,
+             deathNote, note, spouseIds:[], spouseType, spouseOf, generationEra }
+   roles: { masterEmail, admins:[{email}], nodeAdmins:[{email,nodeId}] }
+=========================================================== */
+const uid = () => "p" + Math.random().toString(36).slice(2, 10);
+
+function seedData() {
+  const P = {};
+  const add = (p) => { P[p.id] = p; return p; };
+  const roots = [
+    { name: "慶祥公", gender: "M", generationEra: "清朝 1899年（光緒己亥年）",
+      birthAdYear: 1899, birthEra: "清光緒己亥年（25年）", birthLunar: "2月28日", birthHour: "戌時",
+      spouse: { name: "謝氏", gender: "F", spouseType: "配偶" },
+      children: [["新財","M"],["春來","M"],["阿理","M"],["阿濱","M"],["丁妹","F"],["阿齊","F"],["秋子","F"]] },
+    { name: "慶蘭公", gender: "M", generationEra: "清朝 1899年（光緒己亥年）",
+      birthAdYear: 1899, birthEra: "清光緒己亥年（25年）", birthLunar: "10月19日", birthHour: "丑時",
+      spouse: { name: "吳氏", gender: "F", spouseType: "配偶", birthAdYear: 1902, birthEra: "清光緒壬寅年（28年）", birthLunar: "10月23日", birthHour: "辰時", deathNote: "享壽61歲" },
+      children: [["阿章","M"],["阿標","M"],["秀藤","F"],["阿粉","F"],["阿好","F"]] },
+    { name: "慶發公", gender: "M", generationEra: "清朝 1905年（光緒乙巳年）",
+      birthAdYear: 1905, birthEra: "清光緒乙巳年（31年）", birthLunar: "9月29日", birthHour: "末時",
+      spouse: { name: "涂氏", gender: "F", spouseType: "配偶", birthAdYear: 1906, birthEra: "清光緒丙午年（32年）", birthLunar: "9月19日", birthHour: "酉時" },
+      children: [["阿乾","M","過繼給慶忠公作為第四子，為長房長子"],["萬松","M"]],
+      extraNote: "另育有六女，內文未載姓名" },
+    { name: "慶堋公", gender: "M", generationEra: "清朝 1910年（宣統庚戌年）",
+      birthAdYear: 1910, birthEra: "清宣統庚戌年（2年）", birthLunar: "5月初10日", birthHour: "子時",
+      spouse: { name: "邱氏", gender: "F", spouseType: "配偶", birthAdYear: 1914, birthEra: "民國甲寅年（民國3年）", birthLunar: "8月16日", birthHour: "辰時" },
+      children: [["善郎","M"],["善勇","M"],["善賢","M"],["阿盆","F"],["昭子","F"],["雲子","F"],["阿隨","F"]] },
+    { name: "霖欽公", gender: "M", generationEra: "民國 1913年（民國二年，癸丑年）",
+      birthAdYear: 1913, birthEra: "民國癸丑年（民國2年）", birthLunar: "7月初2日", birthHour: "申時",
+      spouse: { name: "張氏", gender: "F", spouseType: "配偶", birthAdYear: 1914, birthEra: "民國甲寅年（民國3年）", birthLunar: "1月30日", birthHour: "" },
+      children: [["振田","M"],["振坤","M"],["振豐","M"]],
+      extraNote: "另育有一女，內文未載姓名" },
+    { name: "番清公", gender: "M", generationEra: "民國 1922年（民國十一年，壬戌年）",
+      birthAdYear: 1922, birthEra: "民國壬戌年（民國11年）", birthLunar: "3月初16日", birthHour: "亥時",
+      spouses: [ { name: "黃氏", gender: "F", spouseType: "原配", deathNote: "享年23歲" }, { name: "詹氏", gender: "F", spouseType: "繼配" } ],
+      children: [["松茂","M"],["森融","M"],["榮洲","M"],["淳淑","F"],["秋粉","F"],["秋香","F"]] },
+  ];
+  const rootIds = [];
+  roots.forEach((r) => {
+    const rootId = uid(); rootIds.push(rootId);
+    const rootPerson = add({ id: rootId, name: r.name, gender: r.gender, parentId: null, childOrder: 0,
+      birthAdYear: r.birthAdYear, birthEra: r.birthEra, birthLunar: r.birthLunar, birthHour: r.birthHour,
+      deathNote: "", note: r.extraNote || "", spouseIds: [], generationEra: r.generationEra });
+    const spouseList = r.spouses || (r.spouse ? [r.spouse] : []);
+    spouseList.forEach((s) => {
+      const sid = uid();
+      add({ id: sid, name: s.name, gender: s.gender, parentId: null, childOrder: 0,
+        birthAdYear: s.birthAdYear || null, birthEra: s.birthEra || "", birthLunar: s.birthLunar || "",
+        birthHour: s.birthHour || "", deathNote: s.deathNote || "", note: "",
+        spouseIds: [rootId], spouseType: s.spouseType || "配偶", spouseOf: rootId });
+      rootPerson.spouseIds.push(sid);
+    });
+    (r.children || []).forEach(([name, gender, note], idx) => {
+      const cid = uid();
+      add({ id: cid, name, gender, parentId: rootId, childOrder: idx,
+        birthAdYear: null, birthEra: "", birthLunar: "", birthHour: "", deathNote: "", note: note || "", spouseIds: [] });
+    });
+  });
+  return { persons: P, rootIds, roles: { masterEmail: null, admins: [], nodeAdmins: [] } };
+}
+
+/* ===========================================================
+   Google Drive 讀寫（REST API，透過 fetch）
+=========================================================== */
+async function driveReadPublic(fileId) {
+  // 訪客讀取：不需登入，用 API Key 讀取「連結任何人可檢視」的檔案
+  const url = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media&key=${CONFIG.API_KEY}`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error("讀取失敗 (" + res.status + ")");
+  return await res.json();
+}
+async function driveReadAuthed(fileId, accessToken) {
+  const url = `https://www.googleapis.com/drive/v3/files/${fileId}?alt=media`;
+  const res = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+  if (!res.ok) throw new Error("讀取失敗 (" + res.status + ")");
+  return await res.json();
+}
+async function driveWrite(fileId, accessToken, dataObj) {
+  const url = `https://www.googleapis.com/upload/drive/v3/files/${fileId}?uploadType=media`;
+  const res = await fetch(url, {
+    method: "PATCH",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify(dataObj),
+  });
+  if (!res.ok) throw new Error("寫入失敗 (" + res.status + ")");
+  return await res.json();
+}
+async function driveCreateFile(accessToken, name, dataObj) {
+  const boundary = "-------familytree" + Date.now();
+  const metadata = { name, mimeType: "application/json" };
+  const body =
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n` +
+    `--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(dataObj)}\r\n--${boundary}--`;
+  const res = await fetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart", {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": `multipart/related; boundary=${boundary}` },
+    body,
+  });
+  if (!res.ok) throw new Error("建立檔案失敗 (" + res.status + ")");
+  return await res.json(); // { id, ... }
+}
+async function drivePublicShare(fileId, accessToken) {
+  await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ role: "reader", type: "anyone" }),
+  });
+}
+async function driveShareEditor(fileId, accessToken, email) {
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/permissions`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${accessToken}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ role: "writer", type: "user", emailAddress: email }),
+  });
+  if (!res.ok) throw new Error("分享編輯權限失敗 (" + res.status + ")，請確認你自己是否有分享權限");
+  return await res.json();
+}
+
+/* ===========================================================
+   權限工具
+=========================================================== */
+function getDescendantIds(persons, rootId) {
+  const out = new Set([rootId]);
+  const stack = [rootId];
+  while (stack.length) {
+    const cur = stack.pop();
+    Object.values(persons).forEach((p) => {
+      if (p.parentId === cur && !out.has(p.id)) { out.add(p.id); stack.push(p.id); }
+    });
+  }
+  Object.values(persons).forEach((p) => { if (out.has(p.id)) (p.spouseIds || []).forEach((sid) => out.add(sid)); });
+  return out;
+}
+function computeDefaultCollapsed(persons, rootIds) {
+  // 預設只展開到孫子輩（depth 0=公, 1=子女, 2=孫），depth>=2 的節點如果有子女就先收合，
+  // 避免某一房資料筆數變多時，樹狀圖一開始就撐得太寬、把同輩的其他人擠出視野。
+  const out = new Set();
+  const visit = (id, depth) => {
+    const children = Object.values(persons).filter((c) => c.parentId === id);
+    if (depth >= 2 && children.length > 0) out.add(id);
+    children.forEach((c) => visit(c.id, depth + 1));
+  };
+  rootIds.forEach((rid) => visit(rid, 0));
+  return out;
+}
+function getAncestorChain(persons, id) {
+  const chain = [];
+  let cur = persons[id];
+  while (cur && cur.parentId) {
+    chain.push(cur.parentId);
+    cur = persons[cur.parentId];
+  }
+  return chain;
+}
+function roleLabel(role) {
+  if (role === "master") return "主管理者";
+  if (role === "sub") return "副管理者";
+  if (role && role.startsWith("node:")) return "節點管理者";
+  return "訪客（唯讀）";
+}
+
+/* ===========================================================
+   小元件
+=========================================================== */
+const iconBtnStyle = { border: "none", background: "transparent", cursor: "pointer", color: "var(--muted)", padding: 2, fontSize: 14 };
+const miniBtnStyle = { display: "inline-flex", alignItems: "center", gap: 3, fontSize: 11, border: "1px solid var(--gold)", background: "transparent", borderRadius: 5, padding: "3px 7px", cursor: "pointer", color: "var(--ink)" };
+const inputStyle = { width: "100%", padding: "7px 9px", borderRadius: 6, border: "1px solid var(--gold)", background: "var(--card)", color: "var(--ink)", fontSize: 14, boxSizing: "border-box" };
+const overlayStyle = { position: "fixed", inset: 0, background: "rgba(36,31,26,0.5)", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 50, padding: 16 };
+const modalStyle = { background: "var(--paper)", borderRadius: 10, padding: 20, width: "100%", maxWidth: 420, maxHeight: "88vh", overflowY: "auto", border: "1px solid var(--gold)", boxShadow: "0 10px 30px rgba(0,0,0,0.3)" };
+
+function Seal({ text, tone }) {
+  const bg = tone === "jade" ? "var(--jade)" : "var(--seal)";
+  return (
+    <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 30, height: 30, minWidth: 30, borderRadius: 4, background: bg, color: "var(--paper)", fontFamily: "var(--font-display)", fontSize: 13, fontWeight: 700, transform: "rotate(-2deg)", boxShadow: "1px 1px 0 rgba(0,0,0,0.25)" }}>
+      {text}
+    </span>
+  );
+}
+function BirthLine({ p }) {
+  if (!p.birthAdYear && !p.birthEra) return <span style={{ color: "var(--muted)", fontSize: 12 }}>生辰未詳</span>;
+  return (
+    <div style={{ lineHeight: 1.3 }}>
+      {p.birthAdYear && <span style={{ fontFamily: "var(--font-num)", fontSize: 20, fontWeight: 700 }}>{p.birthAdYear}</span>}
+      <div style={{ fontSize: 12, color: "var(--muted)" }}>{[p.birthEra, p.birthLunar, p.birthHour].filter(Boolean).join(" ")}</div>
+      {p.deathNote && <div style={{ fontSize: 12, color: "var(--seal)" }}>{p.deathNote}</div>}
+    </div>
+  );
+}
+function FormRow({ label, children }) {
+  return <div style={{ marginBottom: 8 }}><label style={{ display: "block", fontSize: 12, color: "var(--muted)", marginBottom: 3 }}>{label}</label>{children}</div>;
+}
+
+function PersonCard({ p, persons, canEditFn, onEdit, onAddChild, onAddSpouse, onAddParent, rootIdsSet, highlight, presentMode }) {
+  const isRoot = rootIdsSet && rootIdsSet.has(p.id);
+  const spouses = (p.spouseIds || []).map((id) => persons[id]).filter(Boolean);
+  const isHit = highlight && p.name.includes(highlight);
+  const canEdit = !presentMode && canEditFn(p.id);
+
+  if (presentMode) {
+    return (
+      <div style={{ border: `1.5px solid ${isHit ? "var(--seal)" : "var(--gold)"}`, borderRadius: 8, background: "var(--card)", padding: "10px 12px", minWidth: 170, boxShadow: isHit ? "0 0 0 3px rgba(155,46,35,0.15)" : "none" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <Seal text={p.gender === "F" ? "女" : "男"} tone={p.gender === "F" ? "jade" : "seal"} />
+          <div style={{ fontFamily: "var(--font-display)", fontSize: 17, fontWeight: 700 }}>{p.name}</div>
+        </div>
+        {p.birthAdYear && <div style={{ marginTop: 4, fontFamily: "var(--font-num)", fontSize: 18, fontWeight: 700 }}>{p.birthAdYear}</div>}
+        {spouses.length > 0 && (
+          <div style={{ marginTop: 6, borderTop: "1px dashed var(--gold)", paddingTop: 6, fontSize: 13, color: "var(--jade)" }}>
+            {spouses.map((s) => <div key={s.id}>{s.name}</div>)}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ border: `1.5px solid ${isHit ? "var(--seal)" : "var(--gold)"}`, borderRadius: 8, background: "var(--card)", padding: "10px 12px", minWidth: 190, boxShadow: isHit ? "0 0 0 3px rgba(155,46,35,0.15)" : "none" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+        <Seal text={p.gender === "F" ? "女" : "男"} tone={p.gender === "F" ? "jade" : "seal"} />
+        <div style={{ fontFamily: "var(--font-display)", fontSize: 17, fontWeight: 700 }}>{p.name}</div>
+        {canEdit && <button onClick={() => onEdit(p.id)} title="編輯" style={iconBtnStyle}>✎</button>}
+      </div>
+      <div style={{ marginTop: 6 }}><BirthLine p={p} /></div>
+      {p.note && <div style={{ marginTop: 4, fontSize: 12, color: "var(--muted)", fontStyle: "italic" }}>備註：{p.note}</div>}
+      {spouses.length > 0 && (
+        <div style={{ marginTop: 8, borderTop: "1px dashed var(--gold)", paddingTop: 6 }}>
+          {spouses.map((s) => (
+            <div key={s.id} style={{ display: "flex", alignItems: "flex-start", gap: 6, marginBottom: 4 }}>
+              <span style={{ fontSize: 11, color: "var(--jade)", fontWeight: 700, marginTop: 2 }}>{s.spouseType || "配偶"}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 14, fontWeight: 600 }}>{s.name}</div>
+                <BirthLine p={s} />
+              </div>
+              {canEditFn(s.id) && <button onClick={() => onEdit(s.id)} title="編輯配偶" style={iconBtnStyle}>✎</button>}
+            </div>
+          ))}
+        </div>
+      )}
+      {canEdit && (
+        <div style={{ display: "flex", gap: 6, marginTop: 8, flexWrap: "wrap" }}>
+          <button onClick={() => onAddSpouse(p.id)} style={miniBtnStyle}>＋配偶</button>
+          <button onClick={() => onAddChild(p.id)} style={miniBtnStyle}>＋子女</button>
+          {isRoot && onAddParent && <button onClick={() => onAddParent(p.id)} style={{ ...miniBtnStyle, borderColor: "var(--jade)", color: "var(--jade)" }}>＋上一代</button>}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TreeNode({ id, persons, collapsed, toggle, ...actions }) {
+  const p = persons[id];
+  if (!p) return null;
+  const children = Object.values(persons).filter((c) => c.parentId === id).sort((a, b) => a.childOrder - b.childOrder);
+  const isCollapsed = collapsed.has(id);
+  return (
+    <div data-person-id={id} style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        {children.length > 0 && <button onClick={() => toggle(id)} style={{ ...iconBtnStyle, color: "var(--gold)" }}>{isCollapsed ? "▶" : "▼"}</button>}
+        <PersonCard p={p} persons={persons} {...actions} />
+      </div>
+      {!isCollapsed && children.length > 0 && (
+        <div style={{ position: "relative", marginTop: 18, paddingTop: 18, borderTop: "2px solid var(--gold)" }}>
+          <div style={{ display: "flex", gap: 28 }}>
+            {children.map((c) => (
+              <div key={c.id} style={{ position: "relative" }}>
+                <div style={{ position: "absolute", top: -18, left: "50%", width: 2, height: 18, background: "var(--gold)" }} />
+                <TreeNode id={c.id} persons={persons} collapsed={collapsed} toggle={toggle} {...actions} />
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+function ListNode({ id, persons, depth, expanded, toggle, ...actions }) {
+  const p = persons[id];
+  if (!p) return null;
+  const children = Object.values(persons).filter((c) => c.parentId === id).sort((a, b) => a.childOrder - b.childOrder);
+  const isOpen = expanded.has(id);
+  return (
+    <div style={{ marginLeft: depth === 0 ? 0 : 20, marginTop: 10 }}>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 6 }}>
+        {children.length > 0 ? <button onClick={() => toggle(id)} style={{ ...iconBtnStyle, marginTop: 10, color: "var(--gold)" }}>{isOpen ? "▼" : "▶"}</button> : <span style={{ width: 18 }} />}
+        <PersonCard p={p} persons={persons} {...actions} />
+      </div>
+      {isOpen && children.length > 0 && (
+        <div style={{ borderLeft: "2px dotted var(--gold)", marginLeft: 9, paddingLeft: 10 }}>
+          {children.map((c) => <ListNode key={c.id} id={c.id} persons={persons} depth={depth + 1} expanded={expanded} toggle={toggle} {...actions} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PersonForm({ mode, initial, onCancel, onSave, onDelete, allPersons, personId }) {
+  const [f, setF] = useState(initial);
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+  const isSpouseRecord = !!f.spouseOf;
+
+  const parentOptions = useMemo(() => {
+    if (mode !== "edit" || isSpouseRecord || !allPersons || !personId) return [];
+    const excluded = getDescendantIds(allPersons, personId); // 排除自己與所有子孫（避免造成循環）
+    return Object.values(allPersons)
+      .filter((p) => !excluded.has(p.id) && !p.spouseOf)
+      .sort((a, b) => a.name.localeCompare(b.name, "zh-Hant"));
+  }, [allPersons, personId, mode, isSpouseRecord]);
+
+  return (
+    <div style={overlayStyle}>
+      <div style={modalStyle}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <h3 style={{ fontFamily: "var(--font-display)", fontSize: 18, margin: 0 }}>{mode === "edit" ? "編輯人物" : mode === "spouse" ? "新增配偶" : "新增子女"}</h3>
+          <button onClick={onCancel} style={iconBtnStyle}>✕</button>
+        </div>
+        <FormRow label="姓名"><input style={inputStyle} value={f.name} onChange={set("name")} /></FormRow>
+        <FormRow label="性別">
+          <select style={inputStyle} value={f.gender} onChange={set("gender")}><option value="M">男</option><option value="F">女</option></select>
+        </FormRow>
+        {mode === "spouse" && (
+          <FormRow label="配偶關係">
+            <select style={inputStyle} value={f.spouseType || "配偶"} onChange={set("spouseType")}>
+              <option value="配偶">配偶</option><option value="原配">原配</option><option value="繼配">繼配</option>
+            </select>
+          </FormRow>
+        )}
+        {mode === "edit" && !isSpouseRecord && (
+          <FormRow label="上層（父親）">
+            <select style={inputStyle} value={f.parentId || ""} onChange={(e) => setF({ ...f, parentId: e.target.value || null })}>
+              <option value="">（設為頂層祖先，不隸屬任何人）</option>
+              {parentOptions.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </FormRow>
+        )}
+        <FormRow label="西元出生年"><input style={inputStyle} type="number" value={f.birthAdYear || ""} onChange={(e) => setF({ ...f, birthAdYear: e.target.value ? Number(e.target.value) : null })} /></FormRow>
+        <FormRow label="朝代干支年"><input style={inputStyle} placeholder="例：清光緒己亥年（25年）" value={f.birthEra || ""} onChange={set("birthEra")} /></FormRow>
+        <FormRow label="農曆日期"><input style={inputStyle} placeholder="例：2月28日" value={f.birthLunar || ""} onChange={set("birthLunar")} /></FormRow>
+        <FormRow label="時辰"><input style={inputStyle} placeholder="例：戌時" value={f.birthHour || ""} onChange={set("birthHour")} /></FormRow>
+        <FormRow label="卒亡／享壽備註"><input style={inputStyle} placeholder="例：享壽61歲" value={f.deathNote || ""} onChange={set("deathNote")} /></FormRow>
+        <FormRow label="其他備註"><input style={inputStyle} placeholder="例：過繼給...作為第四子" value={f.note || ""} onChange={set("note")} /></FormRow>
+        <div style={{ display: "flex", justifyContent: "space-between", marginTop: 16 }}>
+          {mode === "edit" && onDelete ? <button onClick={onDelete} style={{ ...miniBtnStyle, borderColor: "var(--seal)", color: "var(--seal)" }}>🗑 刪除</button> : <span />}
+          <div style={{ display: "flex", gap: 8 }}>
+            <button onClick={onCancel} style={miniBtnStyle}>取消</button>
+            <button onClick={() => onSave(f)} style={{ ...miniBtnStyle, background: "var(--seal)", color: "var(--paper)", borderColor: "var(--seal)" }}>✓ 儲存</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AddParentForm({ otherRoots, onCancel, onCreateNew, onAttachExisting }) {
+  const [mode, setMode] = useState("new"); // "new" | "existing"
+  const [f, setF] = useState({ name: "", gender: "M", birthAdYear: null, birthEra: "", birthLunar: "", birthHour: "", deathNote: "", note: "", generationEra: "" });
+  const [existingId, setExistingId] = useState("");
+  const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
+
+  return (
+    <div style={overlayStyle}>
+      <div style={modalStyle}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <h3 style={{ fontFamily: "var(--font-display)", fontSize: 18, margin: 0 }}>新增上一代</h3>
+          <button onClick={onCancel} style={iconBtnStyle}>✕</button>
+        </div>
+
+        <FormRow label="方式">
+          <select style={inputStyle} value={mode} onChange={(e) => setMode(e.target.value)}>
+            <option value="new">建立一位新的上一代祖先</option>
+            {otherRoots.length > 0 && <option value="existing">歸到現有某位「頂層祖先」底下（例如：跟另一房是兄弟，共用同一位父親）</option>}
+          </select>
+        </FormRow>
+
+        {mode === "existing" ? (
+          <FormRow label="選擇要歸屬的頂層祖先">
+            <select style={inputStyle} value={existingId} onChange={(e) => setExistingId(e.target.value)}>
+              <option value="">請選擇</option>
+              {otherRoots.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </FormRow>
+        ) : (
+          <React.Fragment>
+            <FormRow label="姓名"><input style={inputStyle} value={f.name} onChange={set("name")} /></FormRow>
+            <FormRow label="性別">
+              <select style={inputStyle} value={f.gender} onChange={set("gender")}><option value="M">男</option><option value="F">女</option></select>
+            </FormRow>
+            <FormRow label="西元出生年"><input style={inputStyle} type="number" value={f.birthAdYear || ""} onChange={(e) => setF({ ...f, birthAdYear: e.target.value ? Number(e.target.value) : null })} /></FormRow>
+            <FormRow label="朝代干支年"><input style={inputStyle} placeholder="例：清光緒己亥年（25年）" value={f.birthEra || ""} onChange={set("birthEra")} /></FormRow>
+            <FormRow label="農曆日期"><input style={inputStyle} placeholder="例：2月28日" value={f.birthLunar || ""} onChange={set("birthLunar")} /></FormRow>
+            <FormRow label="時辰"><input style={inputStyle} placeholder="例：戌時" value={f.birthHour || ""} onChange={set("birthHour")} /></FormRow>
+            <FormRow label="卒亡／享壽備註"><input style={inputStyle} placeholder="例：享壽61歲" value={f.deathNote || ""} onChange={set("deathNote")} /></FormRow>
+            <FormRow label="其他備註"><input style={inputStyle} value={f.note || ""} onChange={set("note")} /></FormRow>
+            <FormRow label="世代分組標題（顯示於樹狀圖／清單最上方）"><input style={inputStyle} placeholder="例：清朝 1870年（同治己巳年）" value={f.generationEra || ""} onChange={set("generationEra")} /></FormRow>
+          </React.Fragment>
+        )}
+
+        <div style={{ display: "flex", justifyContent: "flex-end", gap: 8, marginTop: 16 }}>
+          <button onClick={onCancel} style={miniBtnStyle}>取消</button>
+          <button
+            onClick={() => (mode === "new" ? onCreateNew(f) : existingId && onAttachExisting(existingId))}
+            style={{ ...miniBtnStyle, background: "var(--seal)", color: "var(--paper)", borderColor: "var(--seal)" }}
+          >
+            ✓ 儲存
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ===========================================================
+   登入 / 角色管理（改為 Google 帳號版）
+=========================================================== */
+function AuthPanel({ roles, session, signedInEmail, onSignIn, onSignOut, onClaimMaster, onManage }) {
+  if (!roles) return <div style={{ fontSize: 13, color: "var(--muted)" }}>載入中…</div>;
+
+  if (!signedInEmail) {
+    return (
+      <div style={{ fontSize: 13 }}>
+        <button onClick={onSignIn} style={{ ...miniBtnStyle, background: "var(--ink)", color: "var(--paper)" }}>使用 Google 帳號登入以編輯</button>
+        <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 4 }}>目前為訪客瀏覽模式（唯讀）。</div>
+      </div>
+    );
+  }
+
+  if (!roles.masterEmail) {
+    return (
+      <div style={{ fontSize: 13 }}>
+        <div style={{ marginBottom: 6, color: "var(--muted)" }}>已用 {signedInEmail} 登入。尚未設定主管理者：</div>
+        <button onClick={onClaimMaster} style={{ ...miniBtnStyle, background: "var(--seal)", color: "var(--paper)", borderColor: "var(--seal)" }}>將此帳號設為主管理者</button>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13, flexWrap: "wrap" }}>
+      <span>{signedInEmail}（{roleLabel(session ? session.role : null)}）</span>
+      {session && session.role === "master" && <button onClick={onManage} style={miniBtnStyle}>管理者設定</button>}
+      <button onClick={onSignOut} style={miniBtnStyle}>登出</button>
+    </div>
+  );
+}
+
+function ManagePanel({ roles, persons, fileId, accessToken, onClose, onAddRole, onRemoveRole }) {
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState("sub");
+  const [nodeId, setNodeId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const personOptions = Object.values(persons).sort((a, b) => a.name.localeCompare(b.name, "zh-Hant"));
+
+  const handleAdd = async () => {
+    if (!email || (role === "node" && !nodeId)) return;
+    setBusy(true); setErr("");
+    try {
+      await driveShareEditor(fileId, accessToken, email); // 真正的 Drive 編輯權限
+      await onAddRole({ email, role, nodeId: role === "node" ? nodeId : null });
+      setEmail(""); setNodeId("");
+    } catch (e) {
+      setErr(e.message);
+    } finally { setBusy(false); }
+  };
+
+  return (
+    <div style={overlayStyle}>
+      <div style={modalStyle}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <h3 style={{ fontFamily: "var(--font-display)", fontSize: 18, margin: 0 }}>管理者設定</h3>
+          <button onClick={onClose} style={iconBtnStyle}>✕</button>
+        </div>
+        <div style={{ fontSize: 13, marginBottom: 10 }}><b>主管理者：</b>{roles.masterEmail}</div>
+        <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 10 }}>
+          新增管理者時，會自動把 Google Drive 資料檔案的「編輯」權限分享給該帳號，對方才真正寫得進去。
+        </div>
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 4 }}>新增管理者</div>
+        <FormRow label="Google 帳號 Email"><input style={inputStyle} value={email} onChange={(e) => setEmail(e.target.value)} placeholder="family.member@gmail.com" /></FormRow>
+        <FormRow label="角色">
+          <select style={inputStyle} value={role} onChange={(e) => setRole(e.target.value)}>
+            <option value="sub">副管理者（可編輯全部人物）</option>
+            <option value="node">節點管理者（畫面上僅顯示指定分支的編輯按鈕）</option>
+          </select>
+        </FormRow>
+        {role === "node" && (
+          <FormRow label="指定分支負責人">
+            <select style={inputStyle} value={nodeId} onChange={(e) => setNodeId(e.target.value)}>
+              <option value="">請選擇</option>
+              {personOptions.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+          </FormRow>
+        )}
+        <button disabled={busy} onClick={handleAdd} style={{ ...miniBtnStyle, background: "var(--seal)", color: "var(--paper)", borderColor: "var(--seal)" }}>
+          {busy ? "處理中…" : "＋ 新增"}
+        </button>
+        {err && <div style={{ color: "var(--seal)", fontSize: 12, marginTop: 6 }}>{err}</div>}
+
+        <div style={{ fontSize: 13, fontWeight: 700, marginTop: 16, marginBottom: 4 }}>目前管理者名單</div>
+        {(roles.admins || []).map((a, i) => (
+          <div key={"a" + i} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "5px 0", borderBottom: "1px dashed var(--gold)" }}>
+            <span>{a.email}｜副管理者</span>
+            <button onClick={() => onRemoveRole("sub", i)} style={iconBtnStyle}>🗑</button>
+          </div>
+        ))}
+        {(roles.nodeAdmins || []).map((a, i) => (
+          <div key={"n" + i} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, padding: "5px 0", borderBottom: "1px dashed var(--gold)" }}>
+            <span>{a.email}｜節點管理者（{persons[a.nodeId] ? persons[a.nodeId].name : "未知節點"}）</span>
+            <button onClick={() => onRemoveRole("node", i)} style={iconBtnStyle}>🗑</button>
+          </div>
+        ))}
+        <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 10 }}>
+          提醒：Drive 的編輯權限是整份檔案共用的，「節點管理者」的分支限制只在網頁介面上生效，
+          並非 Google Drive 真正鎖住的權限邊界。
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ===========================================================
+   首次部署 / 尚未設定 FILE_ID 的引導畫面
+=========================================================== */
+function SetupScreen({ signedInEmail, onSignIn, onCreate, busy, resultFileId, err }) {
+  return (
+    <div style={{ maxWidth: 560, margin: "60px auto", padding: 24, background: "var(--card)", border: "1px solid var(--gold)", borderRadius: 10 }}>
+      <h2 style={{ fontFamily: "var(--font-display)", marginTop: 0 }}>初次部署設定</h2>
+      <p style={{ fontSize: 14, lineHeight: 1.7 }}>
+        目前程式碼裡的 <code>CONFIG.FILE_ID</code> 是空的，代表資料檔案還沒建立。
+        請先用你的 Google 帳號登入，建立資料檔案一次即可。
+      </p>
+      {!signedInEmail ? (
+        <button onClick={onSignIn} style={{ ...miniBtnStyle, background: "var(--ink)", color: "var(--paper)" }}>使用 Google 帳號登入</button>
+      ) : !resultFileId ? (
+        <div>
+          <div style={{ fontSize: 13, marginBottom: 8 }}>已登入：{signedInEmail}</div>
+          <button disabled={busy} onClick={onCreate} style={{ ...miniBtnStyle, background: "var(--seal)", color: "var(--paper)", borderColor: "var(--seal)" }}>
+            {busy ? "建立中…" : "建立家族資料檔案"}
+          </button>
+        </div>
+      ) : (
+        <div>
+          <div style={{ fontSize: 14, marginBottom: 8 }}>✓ 建立成功！請把以下 File ID 貼到程式碼的 <code>CONFIG.FILE_ID</code>，然後重新推上 GitHub：</div>
+          <div style={{ fontFamily: "monospace", background: "var(--paper)", border: "1px solid var(--gold)", borderRadius: 6, padding: "8px 10px", fontSize: 13, wordBreak: "break-all" }}>
+            {resultFileId}
+          </div>
+        </div>
+      )}
+      {err && <div style={{ color: "var(--seal)", fontSize: 12, marginTop: 8 }}>{err}</div>}
+    </div>
+  );
+}
+
+/* ===========================================================
+   主程式
+=========================================================== */
+function App() {
+  const [persons, setPersons] = useState(null);
+  const [rootIds, setRootIds] = useState([]);
+  const [roles, setRoles] = useState(null);
+  const [signedInEmail, setSignedInEmail] = useState(null);
+  const [accessToken, setAccessToken] = useState(null);
+  const [session, setSession] = useState(null); // { role }
+  const [viewMode, setViewMode] = useState("tree");
+  const [presentMode, setPresentMode] = useState(false);
+  const [zoom, setZoom] = useState({ scale: 1, x: 20, y: 20 });
+  const [search, setSearch] = useState("");
+  const [collapsed, setCollapsed] = useState(new Set());
+  const [expanded, setExpanded] = useState(new Set());
+  const [formState, setFormState] = useState(null);
+  const [showManage, setShowManage] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [loadErr, setLoadErr] = useState("");
+  const tokenClientRef = useRef(null);
+  const canvasViewportRef = useRef(null);
+  const canvasContentRef = useRef(null);
+
+  const [setupBusy, setSetupBusy] = useState(false);
+  const [setupResultFileId, setSetupResultFileId] = useState("");
+  const [setupErr, setSetupErr] = useState("");
+
+  const needsSetup = !CONFIG.FILE_ID;
+
+  // 初始化 Google Identity Services token client
+  useEffect(() => {
+    const wait = setInterval(() => {
+      if (window.google && window.google.accounts && window.google.accounts.oauth2) {
+        tokenClientRef.current = window.google.accounts.oauth2.initTokenClient({
+          client_id: CONFIG.CLIENT_ID,
+          scope: CONFIG.SCOPES,
+          callback: async (resp) => {
+            if (resp.error) { setLoadErr("登入失敗：" + resp.error); return; }
+            setAccessToken(resp.access_token);
+            try {
+              const info = await fetch("https://www.googleapis.com/oauth2/v3/userinfo", {
+                headers: { Authorization: `Bearer ${resp.access_token}` },
+              }).then((r) => r.json());
+              setSignedInEmail(info.email);
+            } catch (e) { setLoadErr("取得帳號資訊失敗"); }
+          },
+        });
+        clearInterval(wait);
+      }
+    }, 200);
+    return () => clearInterval(wait);
+  }, []);
+
+  const signIn = () => tokenClientRef.current && tokenClientRef.current.requestAccessToken();
+  const signOut = () => { setAccessToken(null); setSignedInEmail(null); setSession(null); };
+
+  // 讀取資料（有 FILE_ID 才讀）
+  useEffect(() => {
+    if (needsSetup) { setLoading(false); return; }
+    (async () => {
+      try {
+        const data = accessToken
+          ? await driveReadAuthed(CONFIG.FILE_ID, accessToken)
+          : await driveReadPublic(CONFIG.FILE_ID);
+        const safePersons = data && data.persons ? data.persons : {};
+        const safeRootIds = data && data.rootIds ? data.rootIds : [];
+        setPersons(safePersons);
+        setRootIds(safeRootIds);
+        setRoles((data && data.roles) || { masterEmail: null, admins: [], nodeAdmins: [] });
+        setCollapsed(computeDefaultCollapsed(safePersons, safeRootIds));
+      } catch (e) {
+        setLoadErr("讀取家族資料失敗：" + e.message);
+      } finally {
+        setLoading(false);
+      }
+    })();
+  }, [needsSetup, accessToken]);
+
+  // 根據登入 email + roles 決定 session 角色
+  useEffect(() => {
+    if (!signedInEmail || !roles) { setSession(null); return; }
+    if (roles.masterEmail === signedInEmail) { setSession({ role: "master" }); return; }
+    if ((roles.admins || []).some((a) => a.email === signedInEmail)) { setSession({ role: "sub" }); return; }
+    const node = (roles.nodeAdmins || []).find((a) => a.email === signedInEmail);
+    if (node) { setSession({ role: "node:" + node.nodeId }); return; }
+    setSession(null);
+  }, [signedInEmail, roles]);
+
+  const persistAll = useCallback(async (newPersons, newRootIds, newRoles) => {
+    const finalPersons = newPersons || persons;
+    const finalRootIds = newRootIds || rootIds;
+    const finalRoles = newRoles || roles;
+    setPersons(finalPersons); setRootIds(finalRootIds); setRoles(finalRoles);
+    if (!accessToken) { setLoadErr("尚未登入，無法儲存"); return; }
+    try {
+      await driveWrite(CONFIG.FILE_ID, accessToken, { persons: finalPersons, rootIds: finalRootIds, roles: finalRoles });
+    } catch (e) {
+      setLoadErr("儲存失敗：" + e.message);
+    }
+  }, [persons, rootIds, roles, accessToken]);
+
+  const canEditPerson = useCallback((personId) => {
+    if (!session) return false;
+    if (session.role === "master" || session.role === "sub") return true;
+    if (session.role.startsWith("node:")) {
+      const nodeId = session.role.slice(5);
+      if (!persons) return false;
+      return getDescendantIds(persons, nodeId).has(personId);
+    }
+    return false;
+  }, [session, persons]);
+
+  const handleClaimMaster = async () => {
+    const newRoles = { masterEmail: signedInEmail, admins: [], nodeAdmins: [] };
+    await persistAll(null, null, newRoles);
+  };
+  const handleAddRole = async ({ email, role, nodeId }) => {
+    const newRoles = { ...roles };
+    if (role === "sub") newRoles.admins = [...(roles.admins || []), { email }];
+    else newRoles.nodeAdmins = [...(roles.nodeAdmins || []), { email, nodeId }];
+    await persistAll(null, null, newRoles);
+  };
+  const handleRemoveRole = async (kind, idx) => {
+    const newRoles = { ...roles };
+    if (kind === "sub") newRoles.admins = roles.admins.filter((_, i) => i !== idx);
+    else newRoles.nodeAdmins = roles.nodeAdmins.filter((_, i) => i !== idx);
+    await persistAll(null, null, newRoles);
+  };
+
+  const openEdit = (personId) => setFormState({ mode: "edit", personId });
+  const openAddSpouse = (personId) => setFormState({ mode: "spouse", personId, initial: { name: "", gender: "F", birthAdYear: null, birthEra: "", birthLunar: "", birthHour: "", deathNote: "", note: "", spouseType: "配偶" } });
+  const openAddChild = (personId) => setFormState({ mode: "child", personId, initial: { name: "", gender: "M", birthAdYear: null, birthEra: "", birthLunar: "", birthHour: "", deathNote: "", note: "" } });
+  const openAddParent = (personId) => setFormState({ mode: "parent", personId });
+
+  const handleSaveForm = async (f) => {
+    const newPersons = { ...persons };
+    let newRootIds = rootIds;
+    if (formState.mode === "edit") {
+      const oldParentId = persons[formState.personId].parentId || null;
+      const newParentId = f.parentId || null;
+      newPersons[formState.personId] = { ...newPersons[formState.personId], ...f, parentId: newParentId };
+      if (newParentId !== oldParentId) {
+        const isCurrentlyRoot = rootIds.includes(formState.personId);
+        if (newParentId === null && !isCurrentlyRoot) {
+          newRootIds = [...rootIds, formState.personId];
+        } else if (newParentId !== null && isCurrentlyRoot) {
+          newRootIds = rootIds.filter((id) => id !== formState.personId);
+        }
+      }
+    } else if (formState.mode === "spouse") {
+      const spouseId = uid();
+      newPersons[spouseId] = { id: spouseId, name: f.name, gender: f.gender, parentId: null, childOrder: 0, birthAdYear: f.birthAdYear, birthEra: f.birthEra, birthLunar: f.birthLunar, birthHour: f.birthHour, deathNote: f.deathNote, note: f.note, spouseIds: [formState.personId], spouseType: f.spouseType, spouseOf: formState.personId };
+      newPersons[formState.personId] = { ...newPersons[formState.personId], spouseIds: [...(newPersons[formState.personId].spouseIds || []), spouseId] };
+    } else if (formState.mode === "child") {
+      const childId = uid();
+      const siblingCount = Object.values(persons).filter((p) => p.parentId === formState.personId).length;
+      newPersons[childId] = { id: childId, name: f.name, gender: f.gender, parentId: formState.personId, childOrder: siblingCount, birthAdYear: f.birthAdYear, birthEra: f.birthEra, birthLunar: f.birthLunar, birthHour: f.birthHour, deathNote: f.deathNote, note: f.note, spouseIds: [] };
+    }
+    await persistAll(newPersons, newRootIds, null);
+    setFormState(null);
+  };
+  const handleDeletePerson = async () => {
+    const id = formState.personId;
+    const hasChildren = Object.values(persons).some((p) => p.parentId === id);
+    if (hasChildren) { alert("此人物尚有子女紀錄，請先處理子女節點後再刪除。"); return; }
+    const newPersons = { ...persons };
+    delete newPersons[id];
+    Object.values(newPersons).forEach((p) => { if ((p.spouseIds || []).includes(id)) p.spouseIds = p.spouseIds.filter((s) => s !== id); });
+    const newRootIds = rootIds.filter((r) => r !== id);
+    await persistAll(newPersons, newRootIds, null);
+    setFormState(null);
+  };
+
+  // 新增上一代：建立全新的祖先，原本這個根節點變成新祖先的子女
+  const handleCreateNewAncestor = async (f) => {
+    const currentRootId = formState.personId;
+    const newAncestorId = uid();
+    const newPersons = { ...persons };
+    newPersons[newAncestorId] = {
+      id: newAncestorId, name: f.name, gender: f.gender, parentId: null, childOrder: 0,
+      birthAdYear: f.birthAdYear, birthEra: f.birthEra, birthLunar: f.birthLunar, birthHour: f.birthHour,
+      deathNote: f.deathNote, note: f.note, spouseIds: [], generationEra: f.generationEra || "",
+    };
+    newPersons[currentRootId] = { ...newPersons[currentRootId], parentId: newAncestorId };
+    const newRootIds = rootIds.map((id) => (id === currentRootId ? newAncestorId : id));
+    await persistAll(newPersons, newRootIds, null);
+    setFormState(null);
+  };
+
+  // 新增上一代：歸到現有的另一位頂層祖先底下（例如兩房是兄弟，共用同一父親）
+  const handleAttachExistingAncestor = async (existingAncestorId) => {
+    const currentRootId = formState.personId;
+    const newPersons = { ...persons };
+    newPersons[currentRootId] = { ...newPersons[currentRootId], parentId: existingAncestorId };
+    const newRootIds = rootIds.filter((id) => id !== currentRootId);
+    await persistAll(newPersons, newRootIds, null);
+    setFormState(null);
+  };
+
+  // 搜尋時：自動展開比對到的人物的所有祖先節點，並捲動到該卡片
+  useEffect(() => {
+    const term = search.trim();
+    if (!term || !persons) return;
+    const matches = Object.values(persons).filter((p) => p.name.includes(term));
+    if (matches.length === 0) return;
+    const ancestorIds = new Set();
+    matches.forEach((m) => getAncestorChain(persons, m.id).forEach((id) => ancestorIds.add(id)));
+    if (ancestorIds.size > 0) {
+      setCollapsed((prev) => {
+        const n = new Set(prev);
+        ancestorIds.forEach((id) => n.delete(id));
+        return n;
+      });
+      setExpanded((prev) => {
+        const n = new Set(prev);
+        ancestorIds.forEach((id) => n.add(id));
+        return n;
+      });
+    }
+    const t = setTimeout(() => {
+      const el = document.querySelector(`[data-person-id="${matches[0].id}"]`);
+      if (!el) return;
+      if (viewMode === "tree" && canvasContentRef.current && canvasViewportRef.current) {
+        let x = 0, y = 0, node = el;
+        while (node && node !== canvasContentRef.current) { x += node.offsetLeft; y += node.offsetTop; node = node.offsetParent; }
+        const targetCenterX = x + el.offsetWidth / 2;
+        const targetCenterY = y + el.offsetHeight / 2;
+        const vw = canvasViewportRef.current.clientWidth;
+        const vh = canvasViewportRef.current.clientHeight;
+        setZoom((z) => ({ scale: z.scale, x: vw / 2 - targetCenterX * z.scale, y: vh / 2 - targetCenterY * z.scale }));
+      } else {
+        el.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+      }
+    }, 150);
+    return () => clearTimeout(t);
+  }, [search, persons, viewMode]);
+
+  const expandAll = () => setCollapsed(new Set());
+  const collapseAll = () => {
+    if (!persons) return;
+    const all = new Set(Object.values(persons).filter((p) => Object.values(persons).some((c) => c.parentId === p.id)).map((p) => p.id));
+    setCollapsed(all);
+  };
+
+  const toggleTreeNode = (id) => setCollapsed((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+  const toggleListNode = (id) => setExpanded((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
+
+  const rootIdsSet = useMemo(() => new Set(rootIds), [rootIds]);
+
+  // 樹狀圖畫布：縮放至全覽
+  const fitToView = useCallback(() => {
+    const viewport = canvasViewportRef.current;
+    const content = canvasContentRef.current;
+    if (!viewport || !content) return;
+    const vw = viewport.clientWidth;
+    const vh = viewport.clientHeight;
+    const cw = content.offsetWidth;
+    const ch = content.offsetHeight;
+    if (!cw || !ch || !vw || !vh) return;
+    const rawScale = Math.min(vw / cw, vh / ch) * 0.92;
+    const newScale = Math.min(1.5, Math.max(0.1, rawScale));
+    const newX = Math.max(12, (vw - cw * newScale) / 2);
+    setZoom({ scale: newScale, x: newX, y: 16 });
+  }, []);
+
+  // 進入樹狀圖模式、資料剛載入完成時，自動縮放至全覽一次
+  const hasDataFlag = !!persons;
+  useEffect(() => {
+    if (viewMode === "tree" && hasDataFlag) {
+      const t = setTimeout(fitToView, 60);
+      return () => clearTimeout(t);
+    }
+  }, [viewMode, hasDataFlag, fitToView]);
+
+  // 滑鼠滾輪縮放、拖曳平移、觸控雙指縮放／單指平移
+  useEffect(() => {
+    const viewport = canvasViewportRef.current;
+    if (!viewport || viewMode !== "tree") return;
+
+    const isInteractive = (el) => !!(el && el.closest && el.closest("button, input, select, a, textarea"));
+
+    const onWheel = (e) => {
+      e.preventDefault();
+      const rect = viewport.getBoundingClientRect();
+      const cx = e.clientX - rect.left;
+      const cy = e.clientY - rect.top;
+      const factor = e.deltaY < 0 ? 1.12 : 0.89;
+      setZoom((z) => {
+        const newScale = Math.min(3, Math.max(0.12, z.scale * factor));
+        const contentX = (cx - z.x) / z.scale;
+        const contentY = (cy - z.y) / z.scale;
+        return { scale: newScale, x: cx - contentX * newScale, y: cy - contentY * newScale };
+      });
+    };
+
+    let panning = false;
+    let lastX = 0, lastY = 0;
+    const onMouseDown = (e) => {
+      if (isInteractive(e.target)) return;
+      panning = true; lastX = e.clientX; lastY = e.clientY;
+      viewport.style.cursor = "grabbing";
+    };
+    const onMouseMove = (e) => {
+      if (!panning) return;
+      const dx = e.clientX - lastX, dy = e.clientY - lastY;
+      lastX = e.clientX; lastY = e.clientY;
+      setZoom((z) => ({ ...z, x: z.x + dx, y: z.y + dy }));
+    };
+    const onMouseUp = () => { panning = false; viewport.style.cursor = "grab"; };
+
+    let touchMode = null;
+    let touchLastX = 0, touchLastY = 0;
+    let pinchStartDist = 0, pinchStartScale = 1, pinchMidX = 0, pinchMidY = 0;
+    const dist = (t1, t2) => Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+    const onTouchStart = (e) => {
+      if (e.touches.length === 1) {
+        if (isInteractive(e.target)) return;
+        touchMode = "pan"; touchLastX = e.touches[0].clientX; touchLastY = e.touches[0].clientY;
+      } else if (e.touches.length === 2) {
+        touchMode = "pinch";
+        pinchStartDist = dist(e.touches[0], e.touches[1]);
+        const rect = viewport.getBoundingClientRect();
+        pinchMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
+        pinchMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
+        setZoom((z) => { pinchStartScale = z.scale; return z; });
+      }
+    };
+    const onTouchMove = (e) => {
+      if (touchMode === "pan" && e.touches.length === 1) {
+        e.preventDefault();
+        const dx = e.touches[0].clientX - touchLastX, dy = e.touches[0].clientY - touchLastY;
+        touchLastX = e.touches[0].clientX; touchLastY = e.touches[0].clientY;
+        setZoom((z) => ({ ...z, x: z.x + dx, y: z.y + dy }));
+      } else if (touchMode === "pinch" && e.touches.length === 2) {
+        e.preventDefault();
+        const d = dist(e.touches[0], e.touches[1]);
+        const ratio = pinchStartDist > 0 ? d / pinchStartDist : 1;
+        setZoom((z) => {
+          const newScale = Math.min(3, Math.max(0.12, pinchStartScale * ratio));
+          const contentX = (pinchMidX - z.x) / z.scale;
+          const contentY = (pinchMidY - z.y) / z.scale;
+          return { scale: newScale, x: pinchMidX - contentX * newScale, y: pinchMidY - contentY * newScale };
+        });
+      }
+    };
+    const onTouchEnd = () => { touchMode = null; };
+
+    viewport.addEventListener("wheel", onWheel, { passive: false });
+    viewport.addEventListener("mousedown", onMouseDown);
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    viewport.addEventListener("touchstart", onTouchStart, { passive: false });
+    viewport.addEventListener("touchmove", onTouchMove, { passive: false });
+    viewport.addEventListener("touchend", onTouchEnd);
+
+    return () => {
+      viewport.removeEventListener("wheel", onWheel);
+      viewport.removeEventListener("mousedown", onMouseDown);
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      viewport.removeEventListener("touchstart", onTouchStart);
+      viewport.removeEventListener("touchmove", onTouchMove);
+      viewport.removeEventListener("touchend", onTouchEnd);
+    };
+  }, [viewMode]);
+
+
+  const rootsByEra = useMemo(() => {
+    if (!persons) return [];
+    return rootIds.map((id) => persons[id]).filter(Boolean).sort((a, b) => (a.birthAdYear || 0) - (b.birthAdYear || 0));
+  }, [persons, rootIds]);
+
+  // ---- 初次部署引導 ----
+  if (needsSetup) {
+    return (
+      <div style={{ minHeight: "100vh", padding: 20 }}>
+        <SetupScreen
+          signedInEmail={signedInEmail}
+          onSignIn={signIn}
+          busy={setupBusy}
+          resultFileId={setupResultFileId}
+          err={setupErr}
+          onCreate={async () => {
+            setSetupBusy(true); setSetupErr("");
+            try {
+              const seed = seedData();
+              seed.roles.masterEmail = signedInEmail;
+              const created = await driveCreateFile(accessToken, "family-tree-data.json", seed);
+              await drivePublicShare(created.id, accessToken);
+              setSetupResultFileId(created.id);
+            } catch (e) { setSetupErr(e.message); }
+            finally { setSetupBusy(false); }
+          }}
+        />
+      </div>
+    );
+  }
+
+  if (loading) return <div style={{ padding: 40, textAlign: "center", color: "var(--muted)" }}>載入家族資料中…</div>;
+  if (loadErr && !persons) return <div style={{ padding: 40, textAlign: "center", color: "var(--seal)" }}>{loadErr}</div>;
+  if (!persons) return null;
+
+  return (
+    <div style={{ minHeight: "100vh", padding: "18px 14px 60px" }}>
+      <header style={{ maxWidth: 980, margin: "0 auto 18px" }}>
+        <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+          <h1 style={{ fontFamily: "var(--font-display)", fontSize: 26, fontWeight: 900, margin: 0, letterSpacing: 2 }}>家族樹狀圖</h1>
+          <span style={{ fontSize: 12, color: "var(--muted)" }}>族譜線上維護與展示</span>
+        </div>
+        <div style={{ marginTop: 10 }}>
+          <AuthPanel
+            roles={roles} session={session} signedInEmail={signedInEmail}
+            onSignIn={signIn} onSignOut={signOut}
+            onClaimMaster={handleClaimMaster}
+            onManage={() => setShowManage(true)}
+          />
+        </div>
+        {loadErr && <div style={{ color: "var(--seal)", fontSize: 12, marginTop: 6 }}>{loadErr}</div>}
+      </header>
+
+      <div style={{ maxWidth: 980, margin: "0 auto 18px", display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", borderTop: "1px solid var(--gold)", borderBottom: "1px solid var(--gold)", padding: "10px 0" }}>
+        <div style={{ display: "flex", gap: 4 }}>
+          <button onClick={() => setViewMode("tree")} style={{ ...miniBtnStyle, background: viewMode === "tree" ? "var(--seal)" : "transparent", color: viewMode === "tree" ? "var(--paper)" : "var(--ink)" }}>樹狀圖</button>
+          <button onClick={() => setViewMode("list")} style={{ ...miniBtnStyle, background: viewMode === "list" ? "var(--seal)" : "transparent", color: viewMode === "list" ? "var(--paper)" : "var(--ink)" }}>世代清單</button>
+        </div>
+        {viewMode === "tree" && (
+          <div style={{ display: "flex", gap: 4 }}>
+            <button onClick={expandAll} style={miniBtnStyle}>展開全部</button>
+            <button onClick={collapseAll} style={miniBtnStyle}>收合全部</button>
+            <button onClick={fitToView} style={miniBtnStyle}>縮放至全覽</button>
+            <button onClick={() => setZoom((z) => ({ ...z, scale: Math.min(3, z.scale * 1.2) }))} style={miniBtnStyle}>＋</button>
+            <button onClick={() => setZoom((z) => ({ ...z, scale: Math.max(0.12, z.scale * 0.8) }))} style={miniBtnStyle}>－</button>
+          </div>
+        )}
+        <button
+          onClick={() => setPresentMode((v) => !v)}
+          style={{ ...miniBtnStyle, background: presentMode ? "var(--jade)" : "transparent", color: presentMode ? "var(--paper)" : "var(--ink)", borderColor: "var(--jade)" }}
+          title="簡報總覽：只顯示姓名、西元年份與配偶姓名，適合展示給家人看"
+        >
+          {presentMode ? "簡報總覽中（點擊回完整資料）" : "切換為簡報總覽"}
+        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, minWidth: 160 }}>
+          <input style={{ ...inputStyle, maxWidth: 220 }} placeholder="搜尋姓名…" value={search} onChange={(e) => setSearch(e.target.value)} />
+        </div>
+      </div>
+
+      <main style={{ maxWidth: 980, margin: "0 auto" }}>
+        {viewMode === "tree" && (
+          <div
+            ref={canvasViewportRef}
+            style={{
+              position: "relative", width: "100%", height: "68vh", minHeight: 420,
+              overflow: "hidden", border: "1px solid var(--gold)", borderRadius: 8,
+              background: "var(--paper)", cursor: "grab", touchAction: "none",
+            }}
+          >
+            <div
+              ref={canvasContentRef}
+              style={{
+                position: "absolute", top: 0, left: 0, userSelect: "none",
+                transformOrigin: "0 0",
+                transform: `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})`,
+              }}
+            >
+              <div style={{ display: "flex", flexDirection: "column", gap: 30, padding: "4px 4px 20px" }}>
+                {rootsByEra.map((root) => (
+                  <div key={root.id}>
+                    <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8, fontFamily: "var(--font-display)" }}>{root.generationEra}</div>
+                    <TreeNode id={root.id} persons={persons} collapsed={collapsed} toggle={toggleTreeNode} onEdit={openEdit} onAddChild={openAddChild} onAddSpouse={openAddSpouse} onAddParent={openAddParent} rootIdsSet={rootIdsSet} canEditFn={canEditPerson} highlight={search.trim()} presentMode={presentMode} />
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div style={{ position: "absolute", bottom: 8, right: 10, fontSize: 11, color: "var(--muted)" }}>滾輪／雙指縮放．拖曳平移</div>
+          </div>
+        )}
+        {viewMode === "list" && (
+          <div>
+            {rootsByEra.map((root) => (
+              <div key={root.id} style={{ marginBottom: 20 }}>
+                <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 4, fontFamily: "var(--font-display)" }}>{root.generationEra}</div>
+                <ListNode id={root.id} persons={persons} depth={0} expanded={expanded} toggle={toggleListNode} onEdit={openEdit} onAddChild={openAddChild} onAddSpouse={openAddSpouse} onAddParent={openAddParent} rootIdsSet={rootIdsSet} canEditFn={canEditPerson} highlight={search.trim()} presentMode={presentMode} />
+              </div>
+            ))}
+          </div>
+        )}
+      </main>
+
+      {formState && formState.mode === "parent" && (
+        <AddParentForm
+          otherRoots={rootIds.filter((id) => id !== formState.personId).map((id) => persons[id]).filter(Boolean)}
+          onCancel={() => setFormState(null)}
+          onCreateNew={handleCreateNewAncestor}
+          onAttachExisting={handleAttachExistingAncestor}
+        />
+      )}
+      {formState && formState.mode !== "parent" && (
+        <PersonForm mode={formState.mode} initial={formState.initial || persons[formState.personId]} onCancel={() => setFormState(null)} onSave={handleSaveForm} onDelete={formState.mode === "edit" ? handleDeletePerson : null} allPersons={persons} personId={formState.personId} />
+      )}
+      {showManage && roles && (
+        <ManagePanel roles={roles} persons={persons} fileId={CONFIG.FILE_ID} accessToken={accessToken} onClose={() => setShowManage(false)} onAddRole={handleAddRole} onRemoveRole={handleRemoveRole} />
+      )}
+
+      <footer style={{ maxWidth: 980, margin: "30px auto 0", fontSize: 11, color: "var(--muted)", textAlign: "center" }}>
+        資料存放於 Google Drive；訪客可直接瀏覽（唯讀），登入 Google 帳號並取得授權後可依角色編輯。
+      </footer>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(React.createElement(App));
+</script>
+
+<script>
+  // 手動轉譯上方原始碼，強制使用「classic」JSX 轉換模式（React.createElement），
+  // 避免新版 Babel 預設的「automatic」模式插入 import 陳述式，
+  // 因為這段程式碼是在瀏覽器裡以純 <script> 執行，並非模組（module），不支援 import。
+  (function () {
+    var source = document.getElementById("app-source").textContent;
+    try {
+      var output = Babel.transform(source, {
+        presets: [["react", { runtime: "classic" }]],
+      }).code;
+      var script = document.createElement("script");
+      script.textContent = output;
+      document.body.appendChild(script);
+    } catch (e) {
+      document.getElementById("root").innerHTML =
+        '<div style="padding:40px;color:#9B2E23;font-family:sans-serif;">程式碼編譯失敗：' +
+        (e && e.message ? e.message : String(e)) +
+        "</div>";
+      console.error(e);
+    }
+  })();
+</script>
+</body>
+</html>
