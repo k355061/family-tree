@@ -607,6 +607,7 @@ function App() {
   const [session, setSession] = useState(null); // { role }
   const [viewMode, setViewMode] = useState("tree");
   const [presentMode, setPresentMode] = useState(false);
+  const [zoom, setZoom] = useState({ scale: 1, x: 20, y: 20 });
   const [search, setSearch] = useState("");
   const [collapsed, setCollapsed] = useState(new Set());
   const [expanded, setExpanded] = useState(new Set());
@@ -615,6 +616,8 @@ function App() {
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState("");
   const tokenClientRef = useRef(null);
+  const canvasViewportRef = useRef(null);
+  const canvasContentRef = useRef(null);
 
   const [setupBusy, setSetupBusy] = useState(false);
   const [setupResultFileId, setSetupResultFileId] = useState("");
@@ -814,10 +817,21 @@ function App() {
     }
     const t = setTimeout(() => {
       const el = document.querySelector(`[data-person-id="${matches[0].id}"]`);
-      if (el) el.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+      if (!el) return;
+      if (viewMode === "tree" && canvasContentRef.current && canvasViewportRef.current) {
+        let x = 0, y = 0, node = el;
+        while (node && node !== canvasContentRef.current) { x += node.offsetLeft; y += node.offsetTop; node = node.offsetParent; }
+        const targetCenterX = x + el.offsetWidth / 2;
+        const targetCenterY = y + el.offsetHeight / 2;
+        const vw = canvasViewportRef.current.clientWidth;
+        const vh = canvasViewportRef.current.clientHeight;
+        setZoom((z) => ({ scale: z.scale, x: vw / 2 - targetCenterX * z.scale, y: vh / 2 - targetCenterY * z.scale }));
+      } else {
+        el.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+      }
     }, 150);
     return () => clearTimeout(t);
-  }, [search, persons]);
+  }, [search, persons, viewMode]);
 
   const expandAll = () => setCollapsed(new Set());
   const collapseAll = () => {
@@ -830,6 +844,124 @@ function App() {
   const toggleListNode = (id) => setExpanded((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   const rootIdsSet = useMemo(() => new Set(rootIds), [rootIds]);
+
+  // 樹狀圖畫布：縮放至全覽
+  const fitToView = useCallback(() => {
+    const viewport = canvasViewportRef.current;
+    const content = canvasContentRef.current;
+    if (!viewport || !content) return;
+    const vw = viewport.clientWidth;
+    const vh = viewport.clientHeight;
+    const cw = content.offsetWidth;
+    const ch = content.offsetHeight;
+    if (!cw || !ch || !vw || !vh) return;
+    const rawScale = Math.min(vw / cw, vh / ch) * 0.92;
+    const newScale = Math.min(1.5, Math.max(0.1, rawScale));
+    const newX = Math.max(12, (vw - cw * newScale) / 2);
+    setZoom({ scale: newScale, x: newX, y: 16 });
+  }, []);
+
+  // 進入樹狀圖模式、資料剛載入完成時，自動縮放至全覽一次
+  const hasDataFlag = !!persons;
+  useEffect(() => {
+    if (viewMode === "tree" && hasDataFlag) {
+      const t = setTimeout(fitToView, 60);
+      return () => clearTimeout(t);
+    }
+  }, [viewMode, hasDataFlag, fitToView]);
+
+  // 滑鼠滾輪縮放、拖曳平移、觸控雙指縮放／單指平移
+  useEffect(() => {
+    const viewport = canvasViewportRef.current;
+    if (!viewport || viewMode !== "tree") return;
+
+    const isInteractive = (el) => !!(el && el.closest && el.closest("button, input, select, a, textarea"));
+
+    const onWheel = (e) => {
+      e.preventDefault();
+      const rect = viewport.getBoundingClientRect();
+      const cx = e.clientX - rect.left;
+      const cy = e.clientY - rect.top;
+      const factor = e.deltaY < 0 ? 1.12 : 0.89;
+      setZoom((z) => {
+        const newScale = Math.min(3, Math.max(0.12, z.scale * factor));
+        const contentX = (cx - z.x) / z.scale;
+        const contentY = (cy - z.y) / z.scale;
+        return { scale: newScale, x: cx - contentX * newScale, y: cy - contentY * newScale };
+      });
+    };
+
+    let panning = false;
+    let lastX = 0, lastY = 0;
+    const onMouseDown = (e) => {
+      if (isInteractive(e.target)) return;
+      panning = true; lastX = e.clientX; lastY = e.clientY;
+      viewport.style.cursor = "grabbing";
+    };
+    const onMouseMove = (e) => {
+      if (!panning) return;
+      const dx = e.clientX - lastX, dy = e.clientY - lastY;
+      lastX = e.clientX; lastY = e.clientY;
+      setZoom((z) => ({ ...z, x: z.x + dx, y: z.y + dy }));
+    };
+    const onMouseUp = () => { panning = false; viewport.style.cursor = "grab"; };
+
+    let touchMode = null;
+    let touchLastX = 0, touchLastY = 0;
+    let pinchStartDist = 0, pinchStartScale = 1, pinchMidX = 0, pinchMidY = 0;
+    const dist = (t1, t2) => Math.hypot(t1.clientX - t2.clientX, t1.clientY - t2.clientY);
+    const onTouchStart = (e) => {
+      if (e.touches.length === 1) {
+        if (isInteractive(e.target)) return;
+        touchMode = "pan"; touchLastX = e.touches[0].clientX; touchLastY = e.touches[0].clientY;
+      } else if (e.touches.length === 2) {
+        touchMode = "pinch";
+        pinchStartDist = dist(e.touches[0], e.touches[1]);
+        const rect = viewport.getBoundingClientRect();
+        pinchMidX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
+        pinchMidY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
+        setZoom((z) => { pinchStartScale = z.scale; return z; });
+      }
+    };
+    const onTouchMove = (e) => {
+      if (touchMode === "pan" && e.touches.length === 1) {
+        e.preventDefault();
+        const dx = e.touches[0].clientX - touchLastX, dy = e.touches[0].clientY - touchLastY;
+        touchLastX = e.touches[0].clientX; touchLastY = e.touches[0].clientY;
+        setZoom((z) => ({ ...z, x: z.x + dx, y: z.y + dy }));
+      } else if (touchMode === "pinch" && e.touches.length === 2) {
+        e.preventDefault();
+        const d = dist(e.touches[0], e.touches[1]);
+        const ratio = pinchStartDist > 0 ? d / pinchStartDist : 1;
+        setZoom((z) => {
+          const newScale = Math.min(3, Math.max(0.12, pinchStartScale * ratio));
+          const contentX = (pinchMidX - z.x) / z.scale;
+          const contentY = (pinchMidY - z.y) / z.scale;
+          return { scale: newScale, x: pinchMidX - contentX * newScale, y: pinchMidY - contentY * newScale };
+        });
+      }
+    };
+    const onTouchEnd = () => { touchMode = null; };
+
+    viewport.addEventListener("wheel", onWheel, { passive: false });
+    viewport.addEventListener("mousedown", onMouseDown);
+    window.addEventListener("mousemove", onMouseMove);
+    window.addEventListener("mouseup", onMouseUp);
+    viewport.addEventListener("touchstart", onTouchStart, { passive: false });
+    viewport.addEventListener("touchmove", onTouchMove, { passive: false });
+    viewport.addEventListener("touchend", onTouchEnd);
+
+    return () => {
+      viewport.removeEventListener("wheel", onWheel);
+      viewport.removeEventListener("mousedown", onMouseDown);
+      window.removeEventListener("mousemove", onMouseMove);
+      window.removeEventListener("mouseup", onMouseUp);
+      viewport.removeEventListener("touchstart", onTouchStart);
+      viewport.removeEventListener("touchmove", onTouchMove);
+      viewport.removeEventListener("touchend", onTouchEnd);
+    };
+  }, [viewMode]);
+
 
   const rootsByEra = useMemo(() => {
     if (!persons) return [];
@@ -893,6 +1025,9 @@ function App() {
           <div style={{ display: "flex", gap: 4 }}>
             <button onClick={expandAll} style={miniBtnStyle}>展開全部</button>
             <button onClick={collapseAll} style={miniBtnStyle}>收合全部</button>
+            <button onClick={fitToView} style={miniBtnStyle}>縮放至全覽</button>
+            <button onClick={() => setZoom((z) => ({ ...z, scale: Math.min(3, z.scale * 1.2) }))} style={miniBtnStyle}>＋</button>
+            <button onClick={() => setZoom((z) => ({ ...z, scale: Math.max(0.12, z.scale * 0.8) }))} style={miniBtnStyle}>－</button>
           </div>
         )}
         <button
@@ -909,15 +1044,32 @@ function App() {
 
       <main style={{ maxWidth: 980, margin: "0 auto" }}>
         {viewMode === "tree" && (
-          <div style={{ display: "flex", flexDirection: "column", gap: 30 }}>
-            {rootsByEra.map((root) => (
-              <div key={root.id}>
-                <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8, fontFamily: "var(--font-display)" }}>{root.generationEra}</div>
-                <div style={{ overflowX: "auto", paddingBottom: 8 }}>
-                  <TreeNode id={root.id} persons={persons} collapsed={collapsed} toggle={toggleTreeNode} onEdit={openEdit} onAddChild={openAddChild} onAddSpouse={openAddSpouse} onAddParent={openAddParent} rootIdsSet={rootIdsSet} canEditFn={canEditPerson} highlight={search.trim()} presentMode={presentMode} />
-                </div>
+          <div
+            ref={canvasViewportRef}
+            style={{
+              position: "relative", width: "100%", height: "68vh", minHeight: 420,
+              overflow: "hidden", border: "1px solid var(--gold)", borderRadius: 8,
+              background: "var(--paper)", cursor: "grab", touchAction: "none",
+            }}
+          >
+            <div
+              ref={canvasContentRef}
+              style={{
+                position: "absolute", top: 0, left: 0, userSelect: "none",
+                transformOrigin: "0 0",
+                transform: `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})`,
+              }}
+            >
+              <div style={{ display: "flex", flexDirection: "column", gap: 30, padding: "4px 4px 20px" }}>
+                {rootsByEra.map((root) => (
+                  <div key={root.id}>
+                    <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8, fontFamily: "var(--font-display)" }}>{root.generationEra}</div>
+                    <TreeNode id={root.id} persons={persons} collapsed={collapsed} toggle={toggleTreeNode} onEdit={openEdit} onAddChild={openAddChild} onAddSpouse={openAddSpouse} onAddParent={openAddParent} rootIdsSet={rootIdsSet} canEditFn={canEditPerson} highlight={search.trim()} presentMode={presentMode} />
+                  </div>
+                ))}
               </div>
-            ))}
+            </div>
+            <div style={{ position: "absolute", bottom: 8, right: 10, fontSize: 11, color: "var(--muted)" }}>滾輪／雙指縮放．拖曳平移</div>
           </div>
         )}
         {viewMode === "list" && (
