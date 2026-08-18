@@ -190,6 +190,43 @@ function computeDefaultCollapsed(persons, rootIds) {
   rootIds.forEach((rid) => visit(rid, 0));
   return out;
 }
+function buildRadialLayout(persons, rootId, ringGap) {
+  ringGap = ringGap || 85;
+  const nodes = [];
+  const edgeRefs = [];
+  function visit(id, depth, angleStart, angleEnd) {
+    const p = persons[id];
+    if (!p) return;
+    const angle = (angleStart + angleEnd) / 2;
+    const r = depth === 0 ? 0 : depth * ringGap;
+    const rad = ((angle - 90) * Math.PI) / 180;
+    const x = r * Math.cos(rad);
+    const y = r * Math.sin(rad);
+    const spouseNames = (p.spouseIds || []).map((sid) => persons[sid]).filter(Boolean).map((s) => s.name);
+    nodes.push({ id, name: p.name, gender: p.gender, x, y, ring: depth, spouseNames });
+    const children = Object.values(persons).filter((c) => c.parentId === id).sort((a, b) => a.childOrder - b.childOrder);
+    if (children.length > 0) {
+      const slice = (angleEnd - angleStart) / children.length;
+      children.forEach((c, i) => {
+        edgeRefs.push({ parentId: id, childId: c.id });
+        visit(c.id, depth + 1, angleStart + i * slice, angleStart + (i + 1) * slice);
+      });
+    }
+  }
+  visit(rootId, 0, 0, 360);
+  const byId = Object.fromEntries(nodes.map((n) => [n.id, n]));
+  const edges = edgeRefs.map((e) => ({ x1: byId[e.parentId].x, y1: byId[e.parentId].y, x2: byId[e.childId].x, y2: byId[e.childId].y }));
+  let minX = 0, maxX = 0, minY = 0, maxY = 0;
+  nodes.forEach((n) => {
+    minX = Math.min(minX, n.x - 45); maxX = Math.max(maxX, n.x + 45);
+    minY = Math.min(minY, n.y - 20); maxY = Math.max(maxY, n.y + 40);
+  });
+  const pad = 30;
+  const offsetX = -minX + pad, offsetY = -minY + pad;
+  nodes.forEach((n) => { n.x += offsetX; n.y += offsetY; });
+  edges.forEach((e) => { e.x1 += offsetX; e.y1 += offsetY; e.x2 += offsetX; e.y2 += offsetY; });
+  return { nodes, edges, width: maxX - minX + pad * 2, height: maxY - minY + pad * 2 };
+}
 function getAncestorChain(persons, id) {
   const chain = [];
   let cur = persons[id];
@@ -237,7 +274,7 @@ function FormRow({ label, children }) {
   return <div style={{ marginBottom: 8 }}><label style={{ display: "block", fontSize: 12, color: "var(--muted)", marginBottom: 3 }}>{label}</label>{children}</div>;
 }
 
-function PersonCard({ p, persons, canEditFn, onEdit, onAddChild, onAddSpouse, onAddParent, rootIdsSet, highlight, presentMode }) {
+function PersonCard({ p, persons, canEditFn, onEdit, onAddChild, onAddSpouse, onAddParent, rootIdsSet, highlight, presentMode, compact }) {
   const isRoot = rootIdsSet && rootIdsSet.has(p.id);
   const spouses = (p.spouseIds || []).map((id) => persons[id]).filter(Boolean);
   const isHit = highlight && p.name.includes(highlight);
@@ -254,6 +291,30 @@ function PersonCard({ p, persons, canEditFn, onEdit, onAddChild, onAddSpouse, on
         {spouses.length > 0 && (
           <div style={{ marginTop: 6, borderTop: "1px dashed var(--gold)", paddingTop: 6, fontSize: 13, color: "var(--jade)" }}>
             {spouses.map((s) => <div key={s.id}>{s.name}</div>)}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (compact) {
+    return (
+      <div style={{ border: `1.5px solid ${isHit ? "var(--seal)" : "var(--gold)"}`, borderRadius: 7, background: "var(--card)", padding: "6px 8px", minWidth: 128, boxShadow: isHit ? "0 0 0 3px rgba(155,46,35,0.15)" : "none" }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
+          <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 20, height: 20, minWidth: 20, borderRadius: 3, background: p.gender === "F" ? "var(--jade)" : "var(--seal)", color: "var(--paper)", fontSize: 10, fontWeight: 700 }}>{p.gender === "F" ? "女" : "男"}</span>
+          <div style={{ fontFamily: "var(--font-display)", fontSize: 13, fontWeight: 700 }}>{p.name}</div>
+          {canEdit && <button onClick={() => onEdit(p.id)} title="編輯" style={{ ...iconBtnStyle, fontSize: 11 }}>✎</button>}
+        </div>
+        {p.birthAdYear ? <div style={{ marginTop: 2, fontFamily: "var(--font-num)", fontSize: 13, fontWeight: 700 }}>{p.birthAdYear}</div> : <div style={{ marginTop: 2, fontSize: 10, color: "var(--muted)" }}>生辰未詳</div>}
+        {spouses.length > 0 && (
+          <div style={{ marginTop: 4, borderTop: "1px dashed var(--gold)", paddingTop: 4, fontSize: 11, color: "var(--jade)" }}>
+            {spouses.map((s) => <div key={s.id}>{s.name}</div>)}
+          </div>
+        )}
+        {canEdit && (
+          <div style={{ display: "flex", gap: 4, marginTop: 5, flexWrap: "wrap" }}>
+            <button onClick={() => onAddSpouse(p.id)} style={{ ...miniBtnStyle, fontSize: 10, padding: "2px 5px" }}>＋配偶</button>
+            <button onClick={() => onAddChild(p.id)} style={{ ...miniBtnStyle, fontSize: 10, padding: "2px 5px" }}>＋子女</button>
           </div>
         )}
       </div>
@@ -294,24 +355,26 @@ function PersonCard({ p, persons, canEditFn, onEdit, onAddChild, onAddSpouse, on
   );
 }
 
-function TreeNode({ id, persons, collapsed, toggle, ...actions }) {
+function TreeNode({ id, persons, collapsed, toggle, compact, ...actions }) {
   const p = persons[id];
   if (!p) return null;
   const children = Object.values(persons).filter((c) => c.parentId === id).sort((a, b) => a.childOrder - b.childOrder);
   const isCollapsed = collapsed.has(id);
+  const childrenCompact = children.length >= 6;
+  const gap = childrenCompact ? 10 : 28;
   return (
     <div data-person-id={id} style={{ display: "flex", flexDirection: "column", alignItems: "center" }}>
       <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
         {children.length > 0 && <button onClick={() => toggle(id)} style={{ ...iconBtnStyle, color: "var(--gold)" }}>{isCollapsed ? "▶" : "▼"}</button>}
-        <PersonCard p={p} persons={persons} {...actions} />
+        <PersonCard p={p} persons={persons} compact={compact} {...actions} />
       </div>
       {!isCollapsed && children.length > 0 && (
         <div style={{ position: "relative", marginTop: 18, paddingTop: 18, borderTop: "2px solid var(--gold)" }}>
-          <div style={{ display: "flex", gap: 28 }}>
+          <div style={{ display: "flex", gap }}>
             {children.map((c) => (
               <div key={c.id} style={{ position: "relative" }}>
                 <div style={{ position: "absolute", top: -18, left: "50%", width: 2, height: 18, background: "var(--gold)" }} />
-                <TreeNode id={c.id} persons={persons} collapsed={collapsed} toggle={toggle} {...actions} />
+                <TreeNode id={c.id} persons={persons} collapsed={collapsed} toggle={toggle} compact={childrenCompact} {...actions} />
               </div>
             ))}
           </div>
@@ -337,6 +400,31 @@ function ListNode({ id, persons, depth, expanded, toggle, ...actions }) {
         </div>
       )}
     </div>
+  );
+}
+
+function RadialTree({ id, persons, highlight }) {
+  const layout = useMemo(() => buildRadialLayout(persons, id), [persons, id]);
+  return (
+    <svg width={layout.width} height={layout.height} style={{ display: "block" }}>
+      {layout.edges.map((e, i) => (
+        <line key={i} x1={e.x1} y1={e.y1} x2={e.x2} y2={e.y2} stroke="var(--gold)" strokeWidth="1" />
+      ))}
+      {layout.nodes.map((n) => {
+        const isHit = highlight && n.name.includes(highlight);
+        const color = n.gender === "F" ? "var(--jade)" : "var(--seal)";
+        const rr = Math.max(6, 17 - n.ring * 1.6);
+        return (
+          <g key={n.id} data-person-id={n.id}>
+            <circle cx={n.x} cy={n.y} r={rr} fill={color} fillOpacity={isHit ? 1 : 0.85} stroke={isHit ? "var(--ink)" : "none"} strokeWidth={isHit ? 2 : 0} />
+            <text x={n.x} y={n.y + rr + 13} textAnchor="middle" fontSize={Math.max(9, 13 - n.ring)} fill="var(--ink)" fontFamily="var(--font-display)" fontWeight="700">{n.name}</text>
+            {n.spouseNames.length > 0 && (
+              <text x={n.x} y={n.y + rr + 25} textAnchor="middle" fontSize={Math.max(8, 10 - n.ring)} fill="var(--jade)">{n.spouseNames.join("、")}</text>
+            )}
+          </g>
+        );
+      })}
+    </svg>
   );
 }
 
@@ -839,6 +927,12 @@ function App() {
     const all = new Set(Object.values(persons).filter((p) => Object.values(persons).some((c) => c.parentId === p.id)).map((p) => p.id));
     setCollapsed(all);
   };
+  const expandAllList = () => {
+    if (!persons) return;
+    const all = new Set(Object.values(persons).filter((p) => Object.values(persons).some((c) => c.parentId === p.id)).map((p) => p.id));
+    setExpanded(all);
+  };
+  const collapseAllList = () => setExpanded(new Set());
 
   const toggleTreeNode = (id) => setCollapsed((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
   const toggleListNode = (id) => setExpanded((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
@@ -864,7 +958,7 @@ function App() {
   // 進入樹狀圖模式、資料剛載入完成時，自動縮放至全覽一次
   const hasDataFlag = !!persons;
   useEffect(() => {
-    if (viewMode === "tree" && hasDataFlag) {
+    if ((viewMode === "tree" || viewMode === "radial") && hasDataFlag) {
       const t = setTimeout(fitToView, 60);
       return () => clearTimeout(t);
     }
@@ -873,7 +967,7 @@ function App() {
   // 滑鼠滾輪縮放、拖曳平移、觸控雙指縮放／單指平移
   useEffect(() => {
     const viewport = canvasViewportRef.current;
-    if (!viewport || viewMode !== "tree") return;
+    if (!viewport || (viewMode !== "tree" && viewMode !== "radial")) return;
 
     const isInteractive = (el) => !!(el && el.closest && el.closest("button, input, select, a, textarea"));
 
@@ -999,51 +1093,64 @@ function App() {
   if (!persons) return null;
 
   return (
-    <div style={{ minHeight: "100vh", padding: "18px 14px 60px" }}>
-      <header style={{ maxWidth: 980, margin: "0 auto 18px" }}>
-        <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-          <h1 style={{ fontFamily: "var(--font-display)", fontSize: 26, fontWeight: 900, margin: 0, letterSpacing: 2 }}>家族樹狀圖</h1>
-          <span style={{ fontSize: 12, color: "var(--muted)" }}>族譜線上維護與展示</span>
-        </div>
-        <div style={{ marginTop: 10 }}>
-          <AuthPanel
-            roles={roles} session={session} signedInEmail={signedInEmail}
-            onSignIn={signIn} onSignOut={signOut}
-            onClaimMaster={handleClaimMaster}
-            onManage={() => setShowManage(true)}
-          />
-        </div>
-        {loadErr && <div style={{ color: "var(--seal)", fontSize: 12, marginTop: 6 }}>{loadErr}</div>}
-      </header>
-
-      <div style={{ maxWidth: 980, margin: "0 auto 18px", display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", borderTop: "1px solid var(--gold)", borderBottom: "1px solid var(--gold)", padding: "10px 0" }}>
-        <div style={{ display: "flex", gap: 4 }}>
-          <button onClick={() => setViewMode("tree")} style={{ ...miniBtnStyle, background: viewMode === "tree" ? "var(--seal)" : "transparent", color: viewMode === "tree" ? "var(--paper)" : "var(--ink)" }}>樹狀圖</button>
-          <button onClick={() => setViewMode("list")} style={{ ...miniBtnStyle, background: viewMode === "list" ? "var(--seal)" : "transparent", color: viewMode === "list" ? "var(--paper)" : "var(--ink)" }}>世代清單</button>
-        </div>
-        {viewMode === "tree" && (
-          <div style={{ display: "flex", gap: 4 }}>
-            <button onClick={expandAll} style={miniBtnStyle}>展開全部</button>
-            <button onClick={collapseAll} style={miniBtnStyle}>收合全部</button>
-            <button onClick={fitToView} style={miniBtnStyle}>縮放至全覽</button>
-            <button onClick={() => setZoom((z) => ({ ...z, scale: Math.min(3, z.scale * 1.2) }))} style={miniBtnStyle}>＋</button>
-            <button onClick={() => setZoom((z) => ({ ...z, scale: Math.max(0.12, z.scale * 0.8) }))} style={miniBtnStyle}>－</button>
+    <div style={{ minHeight: "100vh", paddingBottom: 60 }}>
+      <div style={{ position: "sticky", top: 0, zIndex: 30, background: "var(--paper)", boxShadow: "0 1px 0 var(--gold)", padding: "18px 14px 0" }}>
+        <header style={{ maxWidth: 980, margin: "0 auto 18px" }}>
+          <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
+            <h1 style={{ fontFamily: "var(--font-display)", fontSize: 26, fontWeight: 900, margin: 0, letterSpacing: 2 }}>家族樹狀圖</h1>
+            <span style={{ fontSize: 12, color: "var(--muted)" }}>族譜線上維護與展示</span>
           </div>
-        )}
-        <button
-          onClick={() => setPresentMode((v) => !v)}
-          style={{ ...miniBtnStyle, background: presentMode ? "var(--jade)" : "transparent", color: presentMode ? "var(--paper)" : "var(--ink)", borderColor: "var(--jade)" }}
-          title="簡報總覽：只顯示姓名、西元年份與配偶姓名，適合展示給家人看"
-        >
-          {presentMode ? "簡報總覽中（點擊回完整資料）" : "切換為簡報總覽"}
-        </button>
-        <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, minWidth: 160 }}>
-          <input style={{ ...inputStyle, maxWidth: 220 }} placeholder="搜尋姓名…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          <div style={{ marginTop: 10 }}>
+            <AuthPanel
+              roles={roles} session={session} signedInEmail={signedInEmail}
+              onSignIn={signIn} onSignOut={signOut}
+              onClaimMaster={handleClaimMaster}
+              onManage={() => setShowManage(true)}
+            />
+          </div>
+          {loadErr && <div style={{ color: "var(--seal)", fontSize: 12, marginTop: 6 }}>{loadErr}</div>}
+        </header>
+
+        <div style={{ maxWidth: 980, margin: "0 auto 18px", display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center", borderTop: "1px solid var(--gold)", borderBottom: "1px solid var(--gold)", padding: "10px 0" }}>
+          <div style={{ display: "flex", gap: 4 }}>
+            <button onClick={() => setViewMode("tree")} style={{ ...miniBtnStyle, background: viewMode === "tree" ? "var(--seal)" : "transparent", color: viewMode === "tree" ? "var(--paper)" : "var(--ink)" }}>樹狀圖</button>
+            <button onClick={() => setViewMode("list")} style={{ ...miniBtnStyle, background: viewMode === "list" ? "var(--seal)" : "transparent", color: viewMode === "list" ? "var(--paper)" : "var(--ink)" }}>世代清單</button>
+            <button onClick={() => setViewMode("radial")} style={{ ...miniBtnStyle, background: viewMode === "radial" ? "var(--seal)" : "transparent", color: viewMode === "radial" ? "var(--paper)" : "var(--ink)" }}>放射狀總覽</button>
+          </div>
+          {viewMode === "tree" && (
+            <div style={{ display: "flex", gap: 4 }}>
+              <button onClick={expandAll} style={miniBtnStyle}>展開全部</button>
+              <button onClick={collapseAll} style={miniBtnStyle}>收合全部</button>
+            </div>
+          )}
+          {viewMode === "list" && (
+            <div style={{ display: "flex", gap: 4 }}>
+              <button onClick={expandAllList} style={miniBtnStyle}>展開全部</button>
+              <button onClick={collapseAllList} style={miniBtnStyle}>收合全部</button>
+            </div>
+          )}
+          {(viewMode === "tree" || viewMode === "radial") && (
+            <div style={{ display: "flex", gap: 4 }}>
+              <button onClick={fitToView} style={miniBtnStyle}>縮放至全覽</button>
+              <button onClick={() => setZoom((z) => ({ ...z, scale: Math.min(3, z.scale * 1.2) }))} style={miniBtnStyle}>＋</button>
+              <button onClick={() => setZoom((z) => ({ ...z, scale: Math.max(0.12, z.scale * 0.8) }))} style={miniBtnStyle}>－</button>
+            </div>
+          )}
+          <button
+            onClick={() => setPresentMode((v) => !v)}
+            style={{ ...miniBtnStyle, background: presentMode ? "var(--jade)" : "transparent", color: presentMode ? "var(--paper)" : "var(--ink)", borderColor: "var(--jade)" }}
+            title="簡報總覽：只顯示姓名、西元年份與配偶姓名，適合展示給家人看"
+          >
+            {presentMode ? "簡報總覽中（點擊回完整資料）" : "切換為簡報總覽"}
+          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, flex: 1, minWidth: 160 }}>
+            <input style={{ ...inputStyle, maxWidth: 220 }} placeholder="搜尋姓名…" value={search} onChange={(e) => setSearch(e.target.value)} />
+          </div>
         </div>
       </div>
 
-      <main style={{ maxWidth: 980, margin: "0 auto" }}>
-        {viewMode === "tree" && (
+      <main style={{ maxWidth: 980, margin: "0 auto", padding: "18px 14px 0" }}>
+        {(viewMode === "tree" || viewMode === "radial") && (
           <div
             ref={canvasViewportRef}
             style={{
@@ -1060,11 +1167,15 @@ function App() {
                 transform: `translate(${zoom.x}px, ${zoom.y}px) scale(${zoom.scale})`,
               }}
             >
-              <div style={{ display: "flex", flexDirection: "column", gap: 30, padding: "4px 4px 20px" }}>
+              <div style={{ display: "flex", flexDirection: viewMode === "radial" ? "row" : "column", flexWrap: viewMode === "radial" ? "wrap" : "nowrap", gap: 30, padding: "4px 4px 20px" }}>
                 {rootsByEra.map((root) => (
                   <div key={root.id}>
                     <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8, fontFamily: "var(--font-display)" }}>{root.generationEra}</div>
-                    <TreeNode id={root.id} persons={persons} collapsed={collapsed} toggle={toggleTreeNode} onEdit={openEdit} onAddChild={openAddChild} onAddSpouse={openAddSpouse} onAddParent={openAddParent} rootIdsSet={rootIdsSet} canEditFn={canEditPerson} highlight={search.trim()} presentMode={presentMode} />
+                    {viewMode === "tree" ? (
+                      <TreeNode id={root.id} persons={persons} collapsed={collapsed} toggle={toggleTreeNode} onEdit={openEdit} onAddChild={openAddChild} onAddSpouse={openAddSpouse} onAddParent={openAddParent} rootIdsSet={rootIdsSet} canEditFn={canEditPerson} highlight={search.trim()} presentMode={presentMode} />
+                    ) : (
+                      <RadialTree id={root.id} persons={persons} highlight={search.trim()} />
+                    )}
                   </div>
                 ))}
               </div>
@@ -1099,7 +1210,7 @@ function App() {
         <ManagePanel roles={roles} persons={persons} fileId={CONFIG.FILE_ID} accessToken={accessToken} onClose={() => setShowManage(false)} onAddRole={handleAddRole} onRemoveRole={handleRemoveRole} />
       )}
 
-      <footer style={{ maxWidth: 980, margin: "30px auto 0", fontSize: 11, color: "var(--muted)", textAlign: "center" }}>
+      <footer style={{ maxWidth: 980, margin: "30px auto 0", padding: "0 14px", fontSize: 11, color: "var(--muted)", textAlign: "center" }}>
         資料存放於 Google Drive；訪客可直接瀏覽（唯讀），登入 Google 帳號並取得授權後可依角色編輯。
       </footer>
     </div>
