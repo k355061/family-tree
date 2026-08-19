@@ -308,7 +308,12 @@ function PersonCard({ p, persons, canEditFn, onEdit, onAddChild, onAddSpouse, on
         {p.birthAdYear ? <div style={{ marginTop: 2, fontFamily: "var(--font-num)", fontSize: 13, fontWeight: 700 }}>{p.birthAdYear}</div> : <div style={{ marginTop: 2, fontSize: 10, color: "var(--muted)" }}>生辰未詳</div>}
         {spouses.length > 0 && (
           <div style={{ marginTop: 4, borderTop: "1px dashed var(--gold)", paddingTop: 4, fontSize: 11, color: "var(--jade)" }}>
-            {spouses.map((s) => <div key={s.id}>{s.name}</div>)}
+            {spouses.map((s) => (
+              <div key={s.id} style={{ display: "flex", alignItems: "center", gap: 4 }}>
+                <span>{s.name}</span>
+                {canEditFn(s.id) && <button onClick={() => onEdit(s.id)} title="編輯配偶" style={{ ...iconBtnStyle, fontSize: 10, padding: 0 }}>✎</button>}
+              </div>
+            ))}
           </div>
         )}
         {canEdit && (
