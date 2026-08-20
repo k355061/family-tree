@@ -190,6 +190,218 @@ function computeDefaultCollapsed(persons, rootIds) {
   rootIds.forEach((rid) => visit(rid, 0));
   return out;
 }
+/* ===========================================================
+   匯出 / 匯入 工具函式
+=========================================================== */
+function downloadFile(filename, content, mime) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 2000);
+}
+
+function exportToJSONString(persons, rootIds, roles) {
+  return JSON.stringify({ persons, rootIds, roles, exportedAt: new Date().toISOString(), exportVersion: 1 }, null, 2);
+}
+
+function personBirthLineMd(p) {
+  const parts = [p.birthEra, p.birthLunar, p.birthHour].filter(Boolean).join(" ");
+  if (p.birthAdYear) return `${parts ? parts + " " : ""}(${p.birthAdYear}年)`;
+  return parts || "生辰未詳";
+}
+
+function personToMarkdown(id, persons, depth) {
+  const p = persons[id];
+  if (!p) return "";
+  const indent = "  ".repeat(depth);
+  const children = Object.values(persons).filter((c) => c.parentId === id).sort((a, b) => a.childOrder - b.childOrder);
+  const spouses = (p.spouseIds || []).map((sid) => persons[sid]).filter(Boolean);
+  let out = `${indent}- **${p.name}**\n`;
+  out += `${indent}  - 出生日期：${personBirthLineMd(p)}\n`;
+  if (p.deathNote) out += `${indent}  - 卒亡／享壽：${p.deathNote}\n`;
+  if (p.note) out += `${indent}  - 備註：${p.note}\n`;
+  if (spouses.length > 0) {
+    out += `${indent}  - 配偶：\n`;
+    spouses.forEach((s) => {
+      out += `${indent}    - **${s.name}**（${s.spouseType || "配偶"}）\n`;
+      out += `${indent}      - 出生日期：${personBirthLineMd(s)}\n`;
+      if (s.deathNote) out += `${indent}      - 卒亡／享壽：${s.deathNote}\n`;
+    });
+  }
+  if (children.length > 0) {
+    out += `${indent}  - 子女：\n`;
+    children.forEach((c) => { out += personToMarkdown(c.id, persons, depth + 2); });
+  }
+  return out;
+}
+
+function exportToMarkdown(persons, rootIds) {
+  const roots = rootIds.map((id) => persons[id]).filter(Boolean).sort((a, b) => (a.birthAdYear || 0) - (b.birthAdYear || 0));
+  let md = `# 家族樹狀圖\n\n匯出時間：${new Date().toLocaleString("zh-TW")}\n\n`;
+  roots.forEach((root) => {
+    if (root.generationEra) md += `## ${root.generationEra}\n\n`;
+    md += personToMarkdown(root.id, persons, 0) + "\n";
+  });
+  return md;
+}
+
+/* 把匯入的資料（不論來源 JSON 或 GEDCOM 轉換後）與現有資料合併，
+   重新產生所有 ID 避免與現有資料撞號，匯入的頂層祖先會成為新的頂層根節點，
+   之後可用「編輯 → 上層（父親）」把它們掛到現有家族樹的正確位置。 */
+function mergeImportedPersons(currentPersons, currentRootIds, importedPersons, importedRootIds) {
+  const idMap = {};
+  Object.keys(importedPersons).forEach((oldId) => { idMap[oldId] = uid(); });
+  const remapped = {};
+  Object.values(importedPersons).forEach((p) => {
+    remapped[idMap[p.id]] = {
+      ...p,
+      id: idMap[p.id],
+      parentId: p.parentId ? (idMap[p.parentId] || null) : null,
+      spouseIds: (p.spouseIds || []).map((sid) => idMap[sid]).filter(Boolean),
+      spouseOf: p.spouseOf ? (idMap[p.spouseOf] || null) : undefined,
+    };
+  });
+  const newRootIds = importedRootIds.map((id) => idMap[id]).filter(Boolean);
+  return {
+    mergedPersons: { ...currentPersons, ...remapped },
+    mergedRootIds: [...currentRootIds, ...newRootIds],
+    importedCount: Object.keys(remapped).length,
+  };
+}
+
+/* ===========================================================
+   GEDCOM 匯入解析（支援常見核心欄位：NAME, SEX, BIRT/DATE, DEAT,
+   FAMC/FAMS, HUSB/WIFE/CHIL；不支援的欄位會被忽略）
+=========================================================== */
+function parseGedcomDateToYear(str) {
+  if (!str) return null;
+  const m = String(str).match(/\b(1[0-9]{3}|20[0-9]{2})\b/);
+  return m ? Number(m[0]) : null;
+}
+
+function parseGedcom(text) {
+  const lines = text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+  const records = []; // { level, xref, tag, value }
+  lines.forEach((line) => {
+    const m = line.match(/^(\d+)\s+(?:@([^@]+)@\s+)?(\S+)(?:\s+(.*))?$/);
+    if (!m) return;
+    records.push({ level: Number(m[1]), xref: m[2] || null, tag: m[3], value: m[4] || "" });
+  });
+
+  const indis = {}; // xref -> { name, sex, birtYear, deatNote, famc, fams:[] }
+  const fams = {};  // xref -> { husb, wife, chil:[] }
+
+  let i = 0;
+  while (i < records.length) {
+    const rec = records[i];
+    if (rec.level === 0 && rec.xref && rec.tag === "INDI") {
+      const person = { xref: rec.xref, name: "", sex: "M", birtYear: null, birtDetail: "", deatNote: "", famc: null, fams: [] };
+      i++;
+      while (i < records.length && records[i].level > 0) {
+        const r = records[i];
+        if (r.level === 1 && r.tag === "NAME") {
+          person.name = r.value.replace(/\//g, "").trim();
+        } else if (r.level === 1 && r.tag === "SEX") {
+          person.sex = r.value.trim().toUpperCase() === "F" ? "F" : "M";
+        } else if (r.level === 1 && r.tag === "BIRT") {
+          let j = i + 1;
+          while (j < records.length && records[j].level > 1) {
+            if (records[j].tag === "DATE") { person.birtYear = parseGedcomDateToYear(records[j].value); person.birtDetail = records[j].value; }
+            j++;
+          }
+        } else if (r.level === 1 && r.tag === "DEAT") {
+          let j = i + 1;
+          while (j < records.length && records[j].level > 1) {
+            if (records[j].tag === "DATE") person.deatNote = "卒：" + records[j].value;
+            j++;
+          }
+        } else if (r.level === 1 && r.tag === "FAMC") {
+          person.famc = (r.value.match(/@([^@]+)@/) || [])[1] || r.value.replace(/@/g, "");
+        } else if (r.level === 1 && r.tag === "FAMS") {
+          person.fams.push((r.value.match(/@([^@]+)@/) || [])[1] || r.value.replace(/@/g, ""));
+        }
+        i++;
+      }
+      indis[rec.xref] = person;
+    } else if (rec.level === 0 && rec.xref && rec.tag === "FAM") {
+      const fam = { xref: rec.xref, husb: null, wife: null, chil: [] };
+      i++;
+      while (i < records.length && records[i].level > 0) {
+        const r = records[i];
+        if (r.level === 1 && r.tag === "HUSB") fam.husb = (r.value.match(/@([^@]+)@/) || [])[1] || r.value.replace(/@/g, "");
+        else if (r.level === 1 && r.tag === "WIFE") fam.wife = (r.value.match(/@([^@]+)@/) || [])[1] || r.value.replace(/@/g, "");
+        else if (r.level === 1 && r.tag === "CHIL") fam.chil.push((r.value.match(/@([^@]+)@/) || [])[1] || r.value.replace(/@/g, ""));
+        i++;
+      }
+      fams[rec.xref] = fam;
+    } else {
+      i++;
+    }
+  }
+
+  // 決定每個家庭的「血緣主幹」：優先選有 FAMC（表示還能往上追溯祖先）的一方為主幹，另一方當配偶
+  const persons = {};
+  const xrefToPersonId = {};
+  let simplifiedCount = 0;
+
+  function ensurePerson(xref) {
+    if (xrefToPersonId[xref]) return xrefToPersonId[xref];
+    const ind = indis[xref];
+    if (!ind) return null;
+    const pid = uid();
+    xrefToPersonId[xref] = pid;
+    persons[pid] = {
+      id: pid, name: ind.name || "未命名", gender: ind.sex === "F" ? "F" : "M",
+      parentId: null, childOrder: 0,
+      birthAdYear: ind.birtYear || null, birthEra: "", birthLunar: ind.birtDetail && !ind.birtYear ? ind.birtDetail : "", birthHour: "",
+      deathNote: ind.deatNote || "", note: "", spouseIds: [],
+    };
+    return pid;
+  }
+
+  Object.values(fams).forEach((fam) => {
+    const husbXref = fam.husb, wifeXref = fam.wife;
+    const husbHasFamc = husbXref && indis[husbXref] && indis[husbXref].famc;
+    const wifeHasFamc = wifeXref && indis[wifeXref] && indis[wifeXref].famc;
+    let spineXref = null, spouseXref = null;
+    if (husbXref && wifeXref) {
+      if (wifeHasFamc && !husbHasFamc) { spineXref = wifeXref; spouseXref = husbXref; }
+      else { spineXref = husbXref; spouseXref = wifeXref; } // 預設父方為主幹
+      if (wifeHasFamc && husbHasFamc) simplifiedCount++; // 雙邊都可追溯，只能保留一邊
+    } else {
+      spineXref = husbXref || wifeXref;
+    }
+    const spinePid = spineXref ? ensurePerson(spineXref) : null;
+    const spousePid = spouseXref ? ensurePerson(spouseXref) : null;
+    if (spinePid && spousePid) {
+      persons[spousePid].parentId = null;
+      persons[spousePid].spouseOf = spinePid;
+      persons[spousePid].spouseType = "配偶";
+      persons[spinePid].spouseIds.push(spousePid);
+      persons[spousePid].spouseIds.push(spinePid);
+    }
+    fam.chil.forEach((cx) => {
+      const cid = ensurePerson(cx);
+      if (cid && spinePid) persons[cid].parentId = spinePid;
+    });
+  });
+  // 沒有被任何家庭關係涵蓋到的個人（孤立節點）也要建立
+  Object.keys(indis).forEach((xref) => ensurePerson(xref));
+
+  // childOrder：依出生年份排序同一父親底下的子女
+  const byParent = {};
+  Object.values(persons).forEach((p) => { if (p.parentId) { (byParent[p.parentId] = byParent[p.parentId] || []).push(p); } });
+  Object.values(byParent).forEach((list) => {
+    list.sort((a, b) => (a.birthAdYear || 9999) - (b.birthAdYear || 9999));
+    list.forEach((p, idx) => { p.childOrder = idx; });
+  });
+
+  const rootIds = Object.values(persons).filter((p) => !p.parentId && !p.spouseOf).map((p) => p.id);
+  return { persons, rootIds, totalCount: Object.keys(persons).length, simplifiedCount };
+}
+
 function buildRadialLayout(persons, rootId, ringGap) {
   ringGap = ringGap || 85;
   const nodes = [];
@@ -581,6 +793,102 @@ function AuthPanel({ roles, session, signedInEmail, onSignIn, onSignOut, onClaim
   );
 }
 
+function ImportExportPanel({ persons, rootIds, roles, canImport, onClose, onImportData }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  const [err, setErr] = useState("");
+  const jsonFileRef = useRef(null);
+  const gedcomFileRef = useRef(null);
+
+  const handleExportJSON = () => {
+    downloadFile("family-tree-export.json", exportToJSONString(persons, rootIds, roles), "application/json");
+  };
+  const handleExportMD = () => {
+    downloadFile("family-tree-export.md", exportToMarkdown(persons, rootIds), "text/markdown");
+  };
+
+  const handleImportJSONFile = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setBusy(true); setErr(""); setMsg("");
+    try {
+      const text = await file.text();
+      const data = JSON.parse(text);
+      if (!data.persons || !data.rootIds) throw new Error("檔案格式不正確，缺少 persons 或 rootIds");
+      const { mergedPersons, mergedRootIds, importedCount } = mergeImportedPersons(persons, rootIds, data.persons, data.rootIds);
+      await onImportData(mergedPersons, mergedRootIds);
+      setMsg(`匯入完成，共加入 ${importedCount} 筆人物資料。新匯入的頂層祖先請到「編輯 → 上層（父親）」設定掛到正確位置。`);
+    } catch (ex) {
+      setErr("匯入失敗：" + ex.message);
+    } finally {
+      setBusy(false);
+      if (jsonFileRef.current) jsonFileRef.current.value = "";
+    }
+  };
+
+  const handleImportGedcomFile = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    setBusy(true); setErr(""); setMsg("");
+    try {
+      const text = await file.text();
+      const parsed = parseGedcom(text);
+      if (parsed.totalCount === 0) throw new Error("沒有解析到任何人物，請確認檔案是否為標準 GEDCOM 格式");
+      const { mergedPersons, mergedRootIds, importedCount } = mergeImportedPersons(persons, rootIds, parsed.persons, parsed.rootIds);
+      await onImportData(mergedPersons, mergedRootIds);
+      let m = `匯入完成，共加入 ${importedCount} 筆人物資料。`;
+      if (parsed.simplifiedCount > 0) m += `其中有 ${parsed.simplifiedCount} 段婚姻雙方原本都有各自的祖先紀錄，因為我們的系統僅支援單一血緣主幹，已簡化保留其中一方的祖先線（另一方僅保留為配偶）。`;
+      m += " 新匯入的頂層祖先請到「編輯 → 上層（父親）」設定掛到正確位置。";
+      setMsg(m);
+    } catch (ex) {
+      setErr("匯入失敗：" + ex.message);
+    } finally {
+      setBusy(false);
+      if (gedcomFileRef.current) gedcomFileRef.current.value = "";
+    }
+  };
+
+  return (
+    <div style={overlayStyle}>
+      <div style={modalStyle}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 12 }}>
+          <h3 style={{ fontFamily: "var(--font-display)", fontSize: 18, margin: 0 }}>匯入／匯出</h3>
+          <button onClick={onClose} style={iconBtnStyle}>✕</button>
+        </div>
+
+        <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>匯出</div>
+        <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
+          <button onClick={handleExportJSON} style={miniBtnStyle}>匯出 JSON（備份／給別人匯入用）</button>
+          <button onClick={handleExportMD} style={miniBtnStyle}>匯出 Markdown（可讀版本）</button>
+        </div>
+
+        {canImport ? (
+          <React.Fragment>
+            <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 6 }}>匯入（會合併進現有家族樹，成為新的頂層祖先）</div>
+            <div style={{ marginBottom: 10 }}>
+              <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4 }}>匯入本系統匯出的 JSON 檔</label>
+              <input ref={jsonFileRef} type="file" accept=".json,application/json" onChange={handleImportJSONFile} disabled={busy} />
+            </div>
+            <div style={{ marginBottom: 10 }}>
+              <label style={{ fontSize: 12, color: "var(--muted)", display: "block", marginBottom: 4 }}>匯入 GEDCOM 檔（.ged，家譜軟體匯出的通用格式）</label>
+              <input ref={gedcomFileRef} type="file" accept=".ged,.gedcom,text/plain" onChange={handleImportGedcomFile} disabled={busy} />
+            </div>
+            {busy && <div style={{ fontSize: 12, color: "var(--muted)" }}>處理中…</div>}
+            {msg && <div style={{ fontSize: 12, color: "var(--jade)", marginTop: 6 }}>{msg}</div>}
+            {err && <div style={{ fontSize: 12, color: "var(--seal)", marginTop: 6 }}>{err}</div>}
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 12 }}>
+              提醒：GEDCOM 匯入僅支援常見的核心欄位（姓名、性別、出生／死亡日期、婚姻與親子關係），
+              不支援附件、來源引註等進階內容；若一段婚姻雙方都各自有完整祖先紀錄，只會保留一方作為血緣主幹。
+            </div>
+          </React.Fragment>
+        ) : (
+          <div style={{ fontSize: 12, color: "var(--muted)" }}>匯入功能僅開放給主管理者／副管理者使用。</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function ManagePanel({ roles, persons, fileId, accessToken, onClose, onAddRole, onRemoveRole }) {
   const [email, setEmail] = useState("");
   const [role, setRole] = useState("sub");
@@ -706,6 +1014,7 @@ function App() {
   const [expanded, setExpanded] = useState(new Set());
   const [formState, setFormState] = useState(null);
   const [showManage, setShowManage] = useState(false);
+  const [showImportExport, setShowImportExport] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState("");
   const tokenClientRef = useRef(null);
@@ -886,6 +1195,11 @@ function App() {
     const newRootIds = rootIds.filter((id) => id !== currentRootId);
     await persistAll(newPersons, newRootIds, null);
     setFormState(null);
+  };
+
+  const handleImportData = async (mergedPersons, mergedRootIds) => {
+    await persistAll(mergedPersons, mergedRootIds, null);
+    setCollapsed(computeDefaultCollapsed(mergedPersons, mergedRootIds));
   };
 
   // 搜尋時：自動展開比對到的人物的所有祖先節點，並捲動到該卡片
@@ -1105,13 +1419,14 @@ function App() {
             <h1 style={{ fontFamily: "var(--font-display)", fontSize: 26, fontWeight: 900, margin: 0, letterSpacing: 2 }}>家族樹狀圖</h1>
             <span style={{ fontSize: 12, color: "var(--muted)" }}>族譜線上維護與展示</span>
           </div>
-          <div style={{ marginTop: 10 }}>
+          <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <AuthPanel
               roles={roles} session={session} signedInEmail={signedInEmail}
               onSignIn={signIn} onSignOut={signOut}
               onClaimMaster={handleClaimMaster}
               onManage={() => setShowManage(true)}
             />
+            <button onClick={() => setShowImportExport(true)} style={miniBtnStyle}>匯入／匯出</button>
           </div>
           {loadErr && <div style={{ color: "var(--seal)", fontSize: 12, marginTop: 6 }}>{loadErr}</div>}
         </header>
@@ -1213,6 +1528,14 @@ function App() {
       )}
       {showManage && roles && (
         <ManagePanel roles={roles} persons={persons} fileId={CONFIG.FILE_ID} accessToken={accessToken} onClose={() => setShowManage(false)} onAddRole={handleAddRole} onRemoveRole={handleRemoveRole} />
+      )}
+      {showImportExport && persons && (
+        <ImportExportPanel
+          persons={persons} rootIds={rootIds} roles={roles}
+          canImport={!!session && (session.role === "master" || session.role === "sub")}
+          onClose={() => setShowImportExport(false)}
+          onImportData={handleImportData}
+        />
       )}
 
       <footer style={{ maxWidth: 980, margin: "30px auto 0", padding: "0 14px", fontSize: 11, color: "var(--muted)", textAlign: "center" }}>
