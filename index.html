@@ -53,18 +53,19 @@
   button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--seal); outline-offset: 2px; }
   button { font-family: var(--font-body); }
 
-  /* 「更多功能」收合選單：手機上是原生可收合區塊；桌面寬度時攤平顯示、隱藏開關本身 */
-  details.toolbar-more { display: inline-flex; }
+  /* 「更多功能」收合選單：手機上是原生可收合區塊；桌面寬度時強制展開內容並隱藏開關本身 */
+  details.toolbar-more { display: inline-flex; flex-wrap: wrap; }
   details.toolbar-more summary { list-style: none; cursor: pointer; }
   details.toolbar-more summary::-webkit-details-marker { display: none; }
-  details.toolbar-more[open] summary { margin-bottom: 6px; }
+  details.toolbar-more > div { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding-top: 8px; }
   @media (min-width: 641px) {
-    details.toolbar-more { display: contents; }
     details.toolbar-more summary { display: none; }
+    /* 強制覆寫瀏覽器對未展開 <details> 內容的預設隱藏，桌面版永遠顯示全部按鈕 */
+    details.toolbar-more > div { display: flex !important; padding-top: 0; gap: 10px; }
   }
   @media (max-width: 640px) {
     details.toolbar-more { width: 100%; }
-    details.toolbar-more > div { display: flex; flex-wrap: wrap; gap: 6px; padding-top: 4px; }
+    details.toolbar-more > div { gap: 10px; row-gap: 10px; }
   }
 </style>
 </head>
@@ -446,30 +447,72 @@ function parseGedcom(text) {
   return { persons, rootIds, totalCount: Object.keys(persons).length, simplifiedCount };
 }
 
-function buildRadialLayout(persons, rootId, ringGap) {
-  ringGap = ringGap || 85;
+function buildRadialLayout(persons, rootId, minRingGap) {
+  minRingGap = minRingGap || 78;
+  const minArcPerNode = 34; // 同一圈相鄰節點間至少保留的弧長（像素）
+
+  const childrenOf = {};
+  Object.values(persons).forEach((p) => {
+    if (p.parentId) (childrenOf[p.parentId] = childrenOf[p.parentId] || []).push(p);
+  });
+  Object.values(childrenOf).forEach((list) => list.sort((a, b) => a.childOrder - b.childOrder));
+
+  const leafCountCache = {};
+  function leafCount(id) {
+    if (leafCountCache[id] !== undefined) return leafCountCache[id];
+    const kids = childrenOf[id] || [];
+    const count = kids.length === 0 ? 1 : kids.reduce((sum, c) => sum + leafCount(c.id), 0);
+    leafCountCache[id] = count;
+    return count;
+  }
+  leafCount(rootId);
+
+  // 第一階段：純粹依權重（子孫數量開根號，緩和差距）分配每個人的角度範圍，此階段不需要知道半徑
+  const angleOf = {};
+  function assignAngles(id, depth, angleStart, angleEnd) {
+    angleOf[id] = { start: angleStart, end: angleEnd, depth };
+    const kids = childrenOf[id] || [];
+    if (kids.length > 0) {
+      const weight = (cid) => Math.sqrt(leafCount(cid));
+      const totalWeight = kids.reduce((sum, c) => sum + weight(c.id), 0);
+      let cursor = angleStart;
+      kids.forEach((c) => {
+        const share = (weight(c.id) / totalWeight) * (angleEnd - angleStart);
+        assignAngles(c.id, depth + 1, cursor, cursor + share);
+        cursor += share;
+      });
+    }
+  }
+  assignAngles(rootId, 0, 0, 360);
+
+  // 第二階段：找出每一圈裡「角度分配最窄」的節點，反推該圈至少要多大半徑才能維持最小間距
+  const maxDepth = Math.max(0, ...Object.values(angleOf).map((a) => a.depth));
+  const ringRadius = { 0: 0 };
+  for (let d = 1; d <= maxDepth; d++) {
+    let minWidthDeg = Infinity;
+    Object.values(angleOf).forEach((a) => { if (a.depth === d) minWidthDeg = Math.min(minWidthDeg, a.end - a.start); });
+    if (!isFinite(minWidthDeg) || minWidthDeg <= 0) minWidthDeg = 360;
+    const minWidthRad = (minWidthDeg * Math.PI) / 180;
+    const requiredByAngle = minArcPerNode / Math.max(minWidthRad, 0.001);
+    ringRadius[d] = Math.max(ringRadius[d - 1] + minRingGap, requiredByAngle);
+  }
+
+  // 第三階段：依角度中點與該圈半徑計算最終座標
   const nodes = [];
   const edgeRefs = [];
-  function visit(id, depth, angleStart, angleEnd) {
+  Object.keys(angleOf).forEach((id) => {
     const p = persons[id];
     if (!p) return;
-    const angle = (angleStart + angleEnd) / 2;
-    const r = depth === 0 ? 0 : depth * ringGap;
+    const { start, end, depth } = angleOf[id];
+    const angle = (start + end) / 2;
+    const r = ringRadius[depth] || 0;
     const rad = ((angle - 90) * Math.PI) / 180;
     const x = r * Math.cos(rad);
     const y = r * Math.sin(rad);
     const spouseNames = (p.spouseIds || []).map((sid) => persons[sid]).filter(Boolean).map((s) => s.name);
     nodes.push({ id, name: p.name, gender: p.gender, x, y, ring: depth, spouseNames });
-    const children = Object.values(persons).filter((c) => c.parentId === id).sort((a, b) => a.childOrder - b.childOrder);
-    if (children.length > 0) {
-      const slice = (angleEnd - angleStart) / children.length;
-      children.forEach((c, i) => {
-        edgeRefs.push({ parentId: id, childId: c.id });
-        visit(c.id, depth + 1, angleStart + i * slice, angleStart + (i + 1) * slice);
-      });
-    }
-  }
-  visit(rootId, 0, 0, 360);
+    (childrenOf[id] || []).forEach((c) => edgeRefs.push({ parentId: id, childId: c.id }));
+  });
   const byId = Object.fromEntries(nodes.map((n) => [n.id, n]));
   const edges = edgeRefs.map((e) => ({ x1: byId[e.parentId].x, y1: byId[e.parentId].y, x2: byId[e.childId].x, y2: byId[e.childId].y }));
   let minX = 0, maxX = 0, minY = 0, maxY = 0;
