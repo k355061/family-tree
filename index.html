@@ -526,6 +526,26 @@ function buildRadialLayout(persons, rootId, minRingGap) {
   edges.forEach((e) => { e.x1 += offsetX; e.y1 += offsetY; e.x2 += offsetX; e.y2 += offsetY; });
   return { nodes, edges, width: maxX - minX + pad * 2, height: maxY - minY + pad * 2 };
 }
+function computeGenerationMap(persons, rootIds) {
+  const map = {};
+  function walk(id, gen) {
+    if (gen != null) map[id] = gen;
+    const children = Object.values(persons).filter((p) => p.parentId === id);
+    children.forEach((c) => walk(c.id, gen != null ? gen + 1 : null));
+  }
+  rootIds.forEach((rid) => {
+    const root = persons[rid];
+    const startGen = root && root.startGeneration ? Number(root.startGeneration) : null;
+    walk(rid, startGen);
+  });
+  // 配偶跟另一半算同一代
+  Object.values(persons).forEach((p) => {
+    if (map[p.id] != null) {
+      (p.spouseIds || []).forEach((sid) => { if (map[sid] == null) map[sid] = map[p.id]; });
+    }
+  });
+  return map;
+}
 function getAncestorChain(persons, id) {
   const chain = [];
   let cur = persons[id];
@@ -573,11 +593,12 @@ function FormRow({ label, children }) {
   return <div style={{ marginBottom: 8 }}><label style={{ display: "block", fontSize: 12, color: "var(--muted)", marginBottom: 3 }}>{label}</label>{children}</div>;
 }
 
-function PersonCard({ p, persons, canEditFn, onEdit, onAddChild, onAddSpouse, onAddParent, rootIdsSet, highlight, presentMode, compact }) {
+function PersonCard({ p, persons, canEditFn, onEdit, onAddChild, onAddSpouse, onAddParent, rootIdsSet, highlight, presentMode, compact, generationMap }) {
   const isRoot = rootIdsSet && rootIdsSet.has(p.id);
   const spouses = (p.spouseIds || []).map((id) => persons[id]).filter(Boolean);
   const isHit = highlight && p.name.includes(highlight);
   const canEdit = !presentMode && canEditFn(p.id);
+  const gen = generationMap ? generationMap[p.id] : null;
 
   if (presentMode) {
     return (
@@ -585,6 +606,7 @@ function PersonCard({ p, persons, canEditFn, onEdit, onAddChild, onAddSpouse, on
         <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <Seal text={p.gender === "F" ? "女" : "男"} tone={p.gender === "F" ? "jade" : "seal"} />
           <div style={{ fontFamily: "var(--font-display)", fontSize: "var(--card-name-font)", fontWeight: 700 }}>{p.name}</div>
+          {gen != null && <span style={{ fontSize: 11, color: "var(--gold)", fontWeight: 700 }}>第{gen}代</span>}
         </div>
         {p.birthAdYear && <div style={{ marginTop: 4, fontFamily: "var(--font-num)", fontSize: 18, fontWeight: 700 }}>{p.birthAdYear}</div>}
         {spouses.length > 0 && (
@@ -602,6 +624,7 @@ function PersonCard({ p, persons, canEditFn, onEdit, onAddChild, onAddSpouse, on
         <div style={{ display: "flex", alignItems: "center", gap: 5 }}>
           <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 20, height: 20, minWidth: 20, borderRadius: 3, background: p.gender === "F" ? "var(--jade)" : "var(--seal)", color: "var(--paper)", fontSize: 10, fontWeight: 700 }}>{p.gender === "F" ? "女" : "男"}</span>
           <div style={{ fontFamily: "var(--font-display)", fontSize: 13, fontWeight: 700 }}>{p.name}</div>
+          {gen != null && <span style={{ fontSize: 9, color: "var(--gold)", fontWeight: 700 }}>第{gen}代</span>}
           {canEdit && <button onClick={() => onEdit(p.id)} title="編輯" style={{ ...iconBtnStyle, fontSize: 11 }}>✎</button>}
         </div>
         {p.birthAdYear ? <div style={{ marginTop: 2, fontFamily: "var(--font-num)", fontSize: 13, fontWeight: 700 }}>{p.birthAdYear}</div> : <div style={{ marginTop: 2, fontSize: 10, color: "var(--muted)" }}>生辰未詳</div>}
@@ -630,6 +653,7 @@ function PersonCard({ p, persons, canEditFn, onEdit, onAddChild, onAddSpouse, on
       <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
         <Seal text={p.gender === "F" ? "女" : "男"} tone={p.gender === "F" ? "jade" : "seal"} />
         <div style={{ fontFamily: "var(--font-display)", fontSize: "var(--card-name-font)", fontWeight: 700 }}>{p.name}</div>
+        {gen != null && <span style={{ fontSize: 11, color: "var(--gold)", fontWeight: 700, border: "1px solid var(--gold)", borderRadius: 4, padding: "1px 5px" }}>第{gen}代</span>}
         {canEdit && <button onClick={() => onEdit(p.id)} title="編輯" style={iconBtnStyle}>✎</button>}
       </div>
       <div style={{ marginTop: 6 }}><BirthLine p={p} /></div>
@@ -707,7 +731,7 @@ function ListNode({ id, persons, depth, expanded, toggle, ...actions }) {
   );
 }
 
-function RadialTree({ id, persons, highlight }) {
+function RadialTree({ id, persons, highlight, generationMap }) {
   const layout = useMemo(() => buildRadialLayout(persons, id), [persons, id]);
   return (
     <svg width={layout.width} height={layout.height} style={{ display: "block" }}>
@@ -718,10 +742,13 @@ function RadialTree({ id, persons, highlight }) {
         const isHit = highlight && n.name.includes(highlight);
         const color = n.gender === "F" ? "var(--jade)" : "var(--seal)";
         const rr = Math.max(6, 17 - n.ring * 1.6);
+        const gen = generationMap ? generationMap[n.id] : null;
         return (
           <g key={n.id} data-person-id={n.id}>
             <circle cx={n.x} cy={n.y} r={rr} fill={color} fillOpacity={isHit ? 1 : 0.85} stroke={isHit ? "var(--ink)" : "none"} strokeWidth={isHit ? 2 : 0} />
-            <text x={n.x} y={n.y + rr + 13} textAnchor="middle" fontSize={Math.max(9, 13 - n.ring)} fill="var(--ink)" fontFamily="var(--font-display)" fontWeight="700">{n.name}</text>
+            <text x={n.x} y={n.y + rr + 13} textAnchor="middle" fontSize={Math.max(9, 13 - n.ring)} fill="var(--ink)" fontFamily="var(--font-display)" fontWeight="700">
+              {gen != null ? `${n.name}（${gen}）` : n.name}
+            </text>
             {n.spouseNames.length > 0 && (
               <text x={n.x} y={n.y + rr + 25} textAnchor="middle" fontSize={Math.max(8, 10 - n.ring)} fill="var(--jade)">{n.spouseNames.join("、")}</text>
             )}
@@ -732,7 +759,7 @@ function RadialTree({ id, persons, highlight }) {
   );
 }
 
-function PersonForm({ mode, initial, onCancel, onSave, onDelete, allPersons, personId }) {
+function PersonForm({ mode, initial, onCancel, onSave, onDelete, allPersons, personId, isRoot }) {
   const [f, setF] = useState(initial);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
   const isSpouseRecord = !!f.spouseOf;
@@ -769,6 +796,15 @@ function PersonForm({ mode, initial, onCancel, onSave, onDelete, allPersons, per
               <option value="">（設為頂層祖先，不隸屬任何人）</option>
               {parentOptions.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
             </select>
+          </FormRow>
+        )}
+        {mode === "edit" && !isSpouseRecord && isRoot && (
+          <FormRow label="起始代數（只有頂層祖先需要設定，下方子孫會自動依此逐代累加）">
+            <input
+              style={inputStyle} type="number" placeholder="例如：18，代表這位是第18代"
+              value={f.startGeneration || ""}
+              onChange={(e) => setF({ ...f, startGeneration: e.target.value ? Number(e.target.value) : null })}
+            />
           </FormRow>
         )}
         <FormRow label="西元出生年"><input style={inputStyle} type="number" value={f.birthAdYear || ""} onChange={(e) => setF({ ...f, birthAdYear: e.target.value ? Number(e.target.value) : null })} /></FormRow>
@@ -1263,12 +1299,14 @@ function App() {
     const currentRootId = formState.personId;
     const newAncestorId = uid();
     const newPersons = { ...persons };
+    const childCurrentGen = generationMap[currentRootId]; // 目前這位若已有代數，新祖先自動往上推一代
     newPersons[newAncestorId] = {
       id: newAncestorId, name: f.name, gender: f.gender, parentId: null, childOrder: 0,
       birthAdYear: f.birthAdYear, birthEra: f.birthEra, birthLunar: f.birthLunar, birthHour: f.birthHour,
       deathNote: f.deathNote, note: f.note, spouseIds: [], generationEra: f.generationEra || "",
+      startGeneration: childCurrentGen != null ? childCurrentGen - 1 : null,
     };
-    newPersons[currentRootId] = { ...newPersons[currentRootId], parentId: newAncestorId };
+    newPersons[currentRootId] = { ...newPersons[currentRootId], parentId: newAncestorId, startGeneration: null };
     const newRootIds = rootIds.map((id) => (id === currentRootId ? newAncestorId : id));
     await persistAll(newPersons, newRootIds, null);
     setFormState(null);
@@ -1278,7 +1316,7 @@ function App() {
   const handleAttachExistingAncestor = async (existingAncestorId) => {
     const currentRootId = formState.personId;
     const newPersons = { ...persons };
-    newPersons[currentRootId] = { ...newPersons[currentRootId], parentId: existingAncestorId };
+    newPersons[currentRootId] = { ...newPersons[currentRootId], parentId: existingAncestorId, startGeneration: null };
     const newRootIds = rootIds.filter((id) => id !== currentRootId);
     await persistAll(newPersons, newRootIds, null);
     setFormState(null);
@@ -1344,6 +1382,7 @@ function App() {
   const toggleListNode = (id) => setExpanded((prev) => { const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n; });
 
   const rootIdsSet = useMemo(() => new Set(rootIds), [rootIds]);
+  const generationMap = useMemo(() => (persons ? computeGenerationMap(persons, rootIds) : {}), [persons, rootIds]);
 
   // 樹狀圖畫布：縮放至全覽
   const fitToView = useCallback(() => {
@@ -1586,9 +1625,9 @@ function App() {
                   <div key={root.id}>
                     <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8, fontFamily: "var(--font-display)" }}>{root.generationEra}</div>
                     {viewMode === "tree" ? (
-                      <TreeNode id={root.id} persons={persons} collapsed={collapsed} toggle={toggleTreeNode} onEdit={openEdit} onAddChild={openAddChild} onAddSpouse={openAddSpouse} onAddParent={openAddParent} rootIdsSet={rootIdsSet} canEditFn={canEditPerson} highlight={search.trim()} presentMode={presentMode} />
+                      <TreeNode id={root.id} persons={persons} collapsed={collapsed} toggle={toggleTreeNode} onEdit={openEdit} onAddChild={openAddChild} onAddSpouse={openAddSpouse} onAddParent={openAddParent} rootIdsSet={rootIdsSet} canEditFn={canEditPerson} highlight={search.trim()} presentMode={presentMode} generationMap={generationMap} />
                     ) : (
-                      <RadialTree id={root.id} persons={persons} highlight={search.trim()} />
+                      <RadialTree id={root.id} persons={persons} highlight={search.trim()} generationMap={generationMap} />
                     )}
                   </div>
                 ))}
@@ -1602,7 +1641,7 @@ function App() {
             {rootsByEra.map((root) => (
               <div key={root.id} style={{ marginBottom: 20 }}>
                 <div style={{ fontSize: 13, color: "var(--muted)", marginBottom: 4, fontFamily: "var(--font-display)" }}>{root.generationEra}</div>
-                <ListNode id={root.id} persons={persons} depth={0} expanded={expanded} toggle={toggleListNode} onEdit={openEdit} onAddChild={openAddChild} onAddSpouse={openAddSpouse} onAddParent={openAddParent} rootIdsSet={rootIdsSet} canEditFn={canEditPerson} highlight={search.trim()} presentMode={presentMode} />
+                <ListNode id={root.id} persons={persons} depth={0} expanded={expanded} toggle={toggleListNode} onEdit={openEdit} onAddChild={openAddChild} onAddSpouse={openAddSpouse} onAddParent={openAddParent} rootIdsSet={rootIdsSet} canEditFn={canEditPerson} highlight={search.trim()} presentMode={presentMode} generationMap={generationMap} />
               </div>
             ))}
           </div>
@@ -1618,7 +1657,7 @@ function App() {
         />
       )}
       {formState && formState.mode !== "parent" && (
-        <PersonForm mode={formState.mode} initial={formState.initial || persons[formState.personId]} onCancel={() => setFormState(null)} onSave={handleSaveForm} onDelete={formState.mode === "edit" ? handleDeletePerson : null} allPersons={persons} personId={formState.personId} />
+        <PersonForm mode={formState.mode} initial={formState.initial || persons[formState.personId]} onCancel={() => setFormState(null)} onSave={handleSaveForm} onDelete={formState.mode === "edit" ? handleDeletePerson : null} allPersons={persons} personId={formState.personId} isRoot={rootIdsSet.has(formState.personId)} />
       )}
       {showManage && roles && (
         <ManagePanel roles={roles} persons={persons} fileId={CONFIG.FILE_ID} accessToken={accessToken} onClose={() => setShowManage(false)} onAddRole={handleAddRole} onRemoveRole={handleRemoveRole} />
