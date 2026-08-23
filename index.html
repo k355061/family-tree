@@ -530,8 +530,12 @@ function computeGenerationMap(persons, rootIds) {
   const map = {};
   function walk(id, gen) {
     if (gen != null) map[id] = gen;
-    const children = Object.values(persons).filter((p) => p.parentId === id);
-    children.forEach((c) => walk(c.id, gen != null ? gen + 1 : null));
+    const p = persons[id];
+    const children = Object.values(persons).filter((c) => c.parentId === id);
+    // 代數只透過男性往下傳遞：女兒本身仍算有代數，但她出嫁後所生子女屬於別姓氏，
+    // 不再自動繼承本家代數（僅在族譜上留下有子女的紀錄）。
+    const propagate = gen != null && p && p.gender !== "F";
+    children.forEach((c) => walk(c.id, propagate ? gen + 1 : null));
   }
   rootIds.forEach((rid) => {
     const root = persons[rid];
