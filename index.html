@@ -67,6 +67,18 @@
     details.toolbar-more { width: 100%; }
     details.toolbar-more > div { gap: 10px; row-gap: 10px; }
   }
+
+  /* 列印預覽：畫面上顯示為卡片式紙張預覽；實際列印/另存 PDF 時隱藏應用程式介面與工具列 */
+  .print-page { break-inside: avoid; }
+  @media print {
+    .app-shell { display: none !important; }
+    .print-toolbar { display: none !important; }
+    .print-overlay { position: static !important; background: #fff !important; padding: 0 !important; }
+    #print-content { box-shadow: none !important; margin: 0 !important; max-width: none !important; }
+    .print-page { break-after: page; }
+    .print-page:last-child { break-after: auto; }
+    @page { size: A4; margin: 18mm 16mm; }
+  }
 </style>
 </head>
 <body>
@@ -814,6 +826,64 @@ function RadialTree({ id, persons, highlight, generationMap }) {
   );
 }
 
+function PrintPersonBlock({ id, persons, generationMap, depth }) {
+  const p = persons[id];
+  if (!p) return null;
+  const children = Object.values(persons).filter((c) => c.parentId === id).sort((a, b) => a.childOrder - b.childOrder);
+  const spouses = (p.spouseIds || []).map((sid) => persons[sid]).filter(Boolean);
+  const gen = generationMap ? generationMap[id] : null;
+  return (
+    <div style={{ marginLeft: depth * 16, marginBottom: 7, breakInside: "avoid" }}>
+      <div style={{ fontSize: 13, fontWeight: 500, color: "#241F1A" }}>
+        {p.name}
+        {gen != null && <span style={{ fontSize: 10, color: "#A8823C", marginLeft: 6 }}>第{gen}代</span>}
+        {p.generationChar && <span style={{ fontSize: 10, color: "#3F5D52", marginLeft: 6 }}>字輩：{p.generationChar}</span>}
+        {(p.formalName || p.courtesyName || p.artName) && (
+          <span style={{ fontSize: 10, color: "#7C7264", marginLeft: 6 }}>
+            {p.formalName && `諱：${p.formalName} `}{p.courtesyName && `字：${p.courtesyName} `}{p.artName && `號：${p.artName}`}
+          </span>
+        )}
+      </div>
+      <div style={{ fontSize: 10, color: "#7C7264" }}>
+        {personBirthLineMd(p)}
+        {p.deathNote ? `　${p.deathNote}` : ""}
+        {spouses.length > 0 ? `　配偶：${spouses.map((s) => s.name).join("、")}` : ""}
+      </div>
+      {p.burialPlace && <div style={{ fontSize: 10, color: "#7C7264" }}>墓葬地：{p.burialPlace}</div>}
+      {p.migrationNote && <div style={{ fontSize: 10, color: "#7C7264" }}>遷徙：{p.migrationNote}</div>}
+      {p.note && <div style={{ fontSize: 10, color: "#7C7264", fontStyle: "italic" }}>備註：{p.note}</div>}
+      {p.sourceNote && <div style={{ fontSize: 9, color: "#7C7264", fontStyle: "italic" }}>考據來源：{p.sourceNote}</div>}
+      {children.map((c) => <PrintPersonBlock key={c.id} id={c.id} persons={persons} generationMap={generationMap} depth={depth + 1} />)}
+    </div>
+  );
+}
+
+function PrintPreviewOverlay({ rootsByEra, persons, generationMap, onClose }) {
+  return (
+    <div className="print-overlay" style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 200, overflowY: "auto", padding: "20px 0" }}>
+      <div className="print-toolbar" style={{ position: "sticky", top: 0, display: "flex", justifyContent: "center", gap: 10, padding: "10px 0", background: "var(--paper)", zIndex: 2, borderBottom: "1px solid var(--gold)" }}>
+        <button onClick={() => window.print()} style={{ ...miniBtnStyle, background: "var(--seal)", color: "var(--paper)", borderColor: "var(--seal)" }}>列印／另存為 PDF</button>
+        <button onClick={onClose} style={miniBtnStyle}>關閉預覽</button>
+      </div>
+      <div id="print-content" style={{ maxWidth: 794, margin: "20px auto", background: "#F6F1E4", boxShadow: "0 4px 20px rgba(0,0,0,0.35)" }}>
+        <div className="print-page" style={{ padding: "25% 40px", textAlign: "center", fontFamily: "var(--font-display)" }}>
+          <div style={{ fontSize: 28, fontWeight: 700, color: "#241F1A", letterSpacing: 6 }}>家族族譜</div>
+          <div style={{ width: 40, height: 1, background: "#A8823C", margin: "20px auto" }} />
+          <div style={{ fontSize: 13, color: "#7C7264" }}>匯出日期：{new Date().toLocaleDateString("zh-TW")}</div>
+        </div>
+        <div className="print-page" style={{ padding: "40px 50px", fontFamily: "var(--font-display)" }}>
+          {rootsByEra.map((root) => (
+            <div key={root.id} style={{ marginBottom: 20 }}>
+              <div style={{ fontSize: 12, color: "#7C7264", borderBottom: "0.5px solid #A8823C", paddingBottom: 4, marginBottom: 8 }}>{root.generationEra || "（未分類世代）"}</div>
+              <PrintPersonBlock id={root.id} persons={persons} generationMap={generationMap} depth={0} />
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function PersonForm({ mode, initial, onCancel, onSave, onDelete, allPersons, personId, isRoot }) {
   const [f, setF] = useState(initial);
   const set = (k) => (e) => setF({ ...f, [k]: e.target.value });
@@ -978,7 +1048,7 @@ function AuthPanel({ roles, session, signedInEmail, onSignIn, onSignOut, onClaim
   );
 }
 
-function ImportExportPanel({ persons, rootIds, roles, canImport, fileId, accessToken, onClose, onImportData, onRestoreRevision }) {
+function ImportExportPanel({ persons, rootIds, roles, canImport, fileId, accessToken, onClose, onImportData, onRestoreRevision, onOpenPrintPreview }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
@@ -1079,6 +1149,7 @@ function ImportExportPanel({ persons, rootIds, roles, canImport, fileId, accessT
         <div style={{ display: "flex", gap: 8, marginBottom: 16, flexWrap: "wrap" }}>
           <button onClick={handleExportJSON} style={miniBtnStyle}>匯出 JSON（備份／給別人匯入用）</button>
           <button onClick={handleExportMD} style={miniBtnStyle}>匯出 Markdown（可讀版本）</button>
+          <button onClick={() => { onOpenPrintPreview(); onClose(); }} style={miniBtnStyle}>列印預覽／匯出 PDF</button>
         </div>
 
         {canImport ? (
@@ -1261,6 +1332,7 @@ function App() {
   const [formState, setFormState] = useState(null);
   const [showManage, setShowManage] = useState(false);
   const [showImportExport, setShowImportExport] = useState(false);
+  const [showPrintPreview, setShowPrintPreview] = useState(false);
   const [loading, setLoading] = useState(true);
   const [loadErr, setLoadErr] = useState("");
   const tokenClientRef = useRef(null);
@@ -1666,7 +1738,8 @@ function App() {
   if (!persons) return null;
 
   return (
-    <div style={{ minHeight: "100vh", paddingBottom: 60 }}>
+    <React.Fragment>
+    <div className="app-shell" style={{ minHeight: "100vh", paddingBottom: 60 }}>
       <div style={{ position: "sticky", top: 0, zIndex: 30, background: "var(--paper)", boxShadow: "0 1px 0 var(--gold)", padding: "18px 14px 0" }}>
         <header style={{ maxWidth: 980, margin: "0 auto 18px" }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
@@ -1798,6 +1871,7 @@ function App() {
           onClose={() => setShowImportExport(false)}
           onImportData={handleImportData}
           onRestoreRevision={handleRestoreRevision}
+          onOpenPrintPreview={() => setShowPrintPreview(true)}
         />
       )}
 
@@ -1805,6 +1879,13 @@ function App() {
         資料存放於 Google Drive；訪客可直接瀏覽（唯讀），登入 Google 帳號並取得授權後可依角色編輯。
       </footer>
     </div>
+    {showPrintPreview && (
+      <PrintPreviewOverlay
+        rootsByEra={rootsByEra} persons={persons} generationMap={generationMap}
+        onClose={() => setShowPrintPreview(false)}
+      />
+    )}
+    </React.Fragment>
   );
 }
 
