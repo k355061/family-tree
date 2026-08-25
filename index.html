@@ -207,6 +207,21 @@ async function driveShareEditor(fileId, accessToken, email) {
   if (!res.ok) throw new Error("分享編輯權限失敗 (" + res.status + ")，請確認你自己是否有分享權限");
   return await res.json();
 }
+async function driveListRevisions(fileId, accessToken) {
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/revisions?fields=revisions(id,modifiedTime,lastModifyingUser,size)`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) throw new Error("讀取版本紀錄失敗 (" + res.status + ")");
+  const data = await res.json();
+  return (data.revisions || []).sort((a, b) => new Date(b.modifiedTime) - new Date(a.modifiedTime));
+}
+async function driveGetRevisionContent(fileId, revisionId, accessToken) {
+  const res = await fetch(`https://www.googleapis.com/drive/v3/files/${fileId}/revisions/${revisionId}?alt=media`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+  if (!res.ok) throw new Error("讀取該版本內容失敗 (" + res.status + ")");
+  return await res.json();
+}
 
 /* ===========================================================
    權限工具
@@ -266,6 +281,9 @@ function personToMarkdown(id, persons, depth) {
   let out = `${indent}- **${p.name}**\n`;
   out += `${indent}  - 出生日期：${personBirthLineMd(p)}\n`;
   if (p.deathNote) out += `${indent}  - 卒亡／享壽：${p.deathNote}\n`;
+  if (p.generationChar) out += `${indent}  - 字輩：${p.generationChar}\n`;
+  if (p.burialPlace) out += `${indent}  - 墓葬地：${p.burialPlace}\n`;
+  if (p.migrationNote) out += `${indent}  - 遷徙紀錄：${p.migrationNote}\n`;
   if (p.note) out += `${indent}  - 備註：${p.note}\n`;
   if (spouses.length > 0) {
     out += `${indent}  - 配偶：\n`;
@@ -338,16 +356,30 @@ function parseGedcom(text) {
   const indis = {}; // xref -> { name, sex, birtYear, deatNote, famc, fams:[] }
   const fams = {};  // xref -> { husb, wife, chil:[] }
 
+  // 讀取某欄位底下緊接的 CONT（換行接續）/ CONC（不換行接續）子行，組成完整文字。
+  // GEDCOM 標準規定長文字（如姓名、備註）可能會被拆成多行儲存，若不處理會漏掉後續內容。
+  function readContConc(startIndex, baseLevel, initialValue) {
+    let value = initialValue;
+    let j = startIndex;
+    while (j < records.length && records[j].level > baseLevel) {
+      if (records[j].tag === "CONC") value += records[j].value;
+      else if (records[j].tag === "CONT") value += "\n" + records[j].value;
+      j++;
+    }
+    return value;
+  }
+
   let i = 0;
   while (i < records.length) {
     const rec = records[i];
     if (rec.level === 0 && rec.xref && rec.tag === "INDI") {
-      const person = { xref: rec.xref, name: "", sex: "M", birtYear: null, birtDetail: "", deatNote: "", famc: null, fams: [] };
+      const person = { xref: rec.xref, name: "", sex: "M", birtYear: null, birtDetail: "", deatNote: "", famc: null, fams: [], noteText: "" };
       i++;
       while (i < records.length && records[i].level > 0) {
         const r = records[i];
         if (r.level === 1 && r.tag === "NAME") {
-          person.name = r.value.replace(/\//g, "").trim();
+          const fullName = readContConc(i + 1, 1, r.value);
+          person.name = fullName.replace(/\//g, "").replace(/\n/g, " ").trim();
         } else if (r.level === 1 && r.tag === "SEX") {
           person.sex = r.value.trim().toUpperCase() === "F" ? "F" : "M";
         } else if (r.level === 1 && r.tag === "BIRT") {
@@ -362,6 +394,9 @@ function parseGedcom(text) {
             if (records[j].tag === "DATE") person.deatNote = "卒：" + records[j].value;
             j++;
           }
+        } else if (r.level === 1 && r.tag === "NOTE") {
+          const fullNote = readContConc(i + 1, 1, r.value);
+          if (fullNote.trim()) person.noteText = (person.noteText ? person.noteText + " " : "") + fullNote.trim();
         } else if (r.level === 1 && r.tag === "FAMC") {
           person.famc = (r.value.match(/@([^@]+)@/) || [])[1] || r.value.replace(/@/g, "");
         } else if (r.level === 1 && r.tag === "FAMS") {
@@ -401,7 +436,7 @@ function parseGedcom(text) {
       id: pid, name: ind.name || "未命名", gender: ind.sex === "F" ? "F" : "M",
       parentId: null, childOrder: 0,
       birthAdYear: ind.birtYear || null, birthEra: "", birthLunar: ind.birtDetail && !ind.birtYear ? ind.birtDetail : "", birthHour: "",
-      deathNote: ind.deatNote || "", note: "", spouseIds: [],
+      deathNote: ind.deatNote || "", note: ind.noteText || "", spouseIds: [],
     };
     return pid;
   }
@@ -629,6 +664,7 @@ function PersonCard({ p, persons, canEditFn, onEdit, onAddChild, onAddSpouse, on
           <span style={{ display: "inline-flex", alignItems: "center", justifyContent: "center", width: 20, height: 20, minWidth: 20, borderRadius: 3, background: p.gender === "F" ? "var(--jade)" : "var(--seal)", color: "var(--paper)", fontSize: 10, fontWeight: 700 }}>{p.gender === "F" ? "女" : "男"}</span>
           <div style={{ fontFamily: "var(--font-display)", fontSize: 13, fontWeight: 700 }}>{p.name}</div>
           {gen != null && <span style={{ fontSize: 9, color: "var(--gold)", fontWeight: 700 }}>第{gen}代</span>}
+          {p.generationChar && <span style={{ fontSize: 9, color: "var(--jade)", fontWeight: 700 }}>字輩：{p.generationChar}</span>}
           {canEdit && <button onClick={() => onEdit(p.id)} title="編輯" style={{ ...iconBtnStyle, fontSize: 11 }}>✎</button>}
         </div>
         {p.birthAdYear ? <div style={{ marginTop: 2, fontFamily: "var(--font-num)", fontSize: 13, fontWeight: 700 }}>{p.birthAdYear}</div> : <div style={{ marginTop: 2, fontSize: 10, color: "var(--muted)" }}>生辰未詳</div>}
@@ -658,10 +694,13 @@ function PersonCard({ p, persons, canEditFn, onEdit, onAddChild, onAddSpouse, on
         <Seal text={p.gender === "F" ? "女" : "男"} tone={p.gender === "F" ? "jade" : "seal"} />
         <div style={{ fontFamily: "var(--font-display)", fontSize: "var(--card-name-font)", fontWeight: 700 }}>{p.name}</div>
         {gen != null && <span style={{ fontSize: 11, color: "var(--gold)", fontWeight: 700, border: "1px solid var(--gold)", borderRadius: 4, padding: "1px 5px" }}>第{gen}代</span>}
+        {p.generationChar && <span style={{ fontSize: 11, color: "var(--jade)", fontWeight: 700, border: "1px solid var(--jade)", borderRadius: 4, padding: "1px 5px" }}>字輩：{p.generationChar}</span>}
         {canEdit && <button onClick={() => onEdit(p.id)} title="編輯" style={iconBtnStyle}>✎</button>}
       </div>
       <div style={{ marginTop: 6 }}><BirthLine p={p} /></div>
       {p.note && <div style={{ marginTop: 4, fontSize: 12, color: "var(--muted)", fontStyle: "italic" }}>備註：{p.note}</div>}
+      {p.burialPlace && <div style={{ marginTop: 2, fontSize: 12, color: "var(--muted)" }}>墓葬地：{p.burialPlace}</div>}
+      {p.migrationNote && <div style={{ marginTop: 2, fontSize: 12, color: "var(--muted)" }}>遷徙：{p.migrationNote}</div>}
       {spouses.length > 0 && (
         <div style={{ marginTop: 8, borderTop: "1px dashed var(--gold)", paddingTop: 6 }}>
           {spouses.map((s) => (
@@ -816,6 +855,9 @@ function PersonForm({ mode, initial, onCancel, onSave, onDelete, allPersons, per
         <FormRow label="農曆日期"><input style={inputStyle} placeholder="例：2月28日" value={f.birthLunar || ""} onChange={set("birthLunar")} /></FormRow>
         <FormRow label="時辰"><input style={inputStyle} placeholder="例：戌時" value={f.birthHour || ""} onChange={set("birthHour")} /></FormRow>
         <FormRow label="卒亡／享壽備註"><input style={inputStyle} placeholder="例：享壽61歲" value={f.deathNote || ""} onChange={set("deathNote")} /></FormRow>
+        <FormRow label="字輩（同輩共用字，例如：慶）"><input style={inputStyle} placeholder="例：慶" value={f.generationChar || ""} onChange={set("generationChar")} /></FormRow>
+        <FormRow label="墓葬地"><input style={inputStyle} placeholder="例：xx鄉xx公墓" value={f.burialPlace || ""} onChange={set("burialPlace")} /></FormRow>
+        <FormRow label="遷徙紀錄"><input style={inputStyle} placeholder="例：民國40年遷居台北" value={f.migrationNote || ""} onChange={set("migrationNote")} /></FormRow>
         <FormRow label="其他備註"><input style={inputStyle} placeholder="例：過繼給...作為第四子" value={f.note || ""} onChange={set("note")} /></FormRow>
         <div style={{ display: "flex", justifyContent: "space-between", marginTop: 16 }}>
           {mode === "edit" && onDelete ? <button onClick={onDelete} style={{ ...miniBtnStyle, borderColor: "var(--seal)", color: "var(--seal)" }}>🗑 刪除</button> : <span />}
@@ -920,12 +962,46 @@ function AuthPanel({ roles, session, signedInEmail, onSignIn, onSignOut, onClaim
   );
 }
 
-function ImportExportPanel({ persons, rootIds, roles, canImport, onClose, onImportData }) {
+function ImportExportPanel({ persons, rootIds, roles, canImport, fileId, accessToken, onClose, onImportData, onRestoreRevision }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   const [err, setErr] = useState("");
   const jsonFileRef = useRef(null);
   const gedcomFileRef = useRef(null);
+
+  const [revisions, setRevisions] = useState(null);
+  const [revBusy, setRevBusy] = useState(false);
+  const [revErr, setRevErr] = useState("");
+  const [restoringId, setRestoringId] = useState(null);
+
+  const loadRevisions = async () => {
+    setRevBusy(true); setRevErr("");
+    try {
+      const list = await driveListRevisions(fileId, accessToken);
+      setRevisions(list);
+    } catch (ex) {
+      setRevErr(ex.message);
+    } finally {
+      setRevBusy(false);
+    }
+  };
+
+  const handleRestore = async (rev) => {
+    const timeStr = new Date(rev.modifiedTime).toLocaleString("zh-TW");
+    if (!window.confirm(`確定要把資料還原成「${timeStr}」的版本嗎？\n\n目前的資料會被這個舊版本取代（但目前這版仍會保留在 Google Drive 的版本紀錄裡，還原後如果後悔，可以再從清單裡選回來）。`)) return;
+    setRestoringId(rev.id); setRevErr("");
+    try {
+      const oldData = await driveGetRevisionContent(fileId, rev.id, accessToken);
+      if (!oldData.persons || !oldData.rootIds) throw new Error("這個版本的檔案格式無法辨識");
+      await onRestoreRevision(oldData);
+      setMsg(`已還原成「${timeStr}」的版本。`);
+      onClose();
+    } catch (ex) {
+      setRevErr("還原失敗：" + ex.message);
+    } finally {
+      setRestoringId(null);
+    }
+  };
 
   const handleExportJSON = () => {
     downloadFile("family-tree-export.json", exportToJSONString(persons, rootIds, roles), "application/json");
@@ -1007,6 +1083,33 @@ function ImportExportPanel({ persons, rootIds, roles, canImport, onClose, onImpo
               提醒：GEDCOM 匯入僅支援常見的核心欄位（姓名、性別、出生／死亡日期、婚姻與親子關係），
               不支援附件、來源引註等進階內容；若一段婚姻雙方都各自有完整祖先紀錄，只會保留一方作為血緣主幹。
             </div>
+
+            <div style={{ fontSize: 13, fontWeight: 700, marginTop: 20, marginBottom: 6, borderTop: "1px solid var(--gold)", paddingTop: 14 }}>版本紀錄</div>
+            <div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8 }}>
+              資料每次存檔都會在 Google Drive 留下版本紀錄，如果不小心改壞了，可以在這裡還原成之前的版本。
+            </div>
+            {revisions === null ? (
+              <button onClick={loadRevisions} disabled={revBusy} style={miniBtnStyle}>{revBusy ? "載入中…" : "載入版本紀錄"}</button>
+            ) : (
+              <div style={{ maxHeight: 220, overflowY: "auto", border: "1px solid var(--gold)", borderRadius: 6 }}>
+                {revisions.length === 0 && <div style={{ padding: 10, fontSize: 12, color: "var(--muted)" }}>目前沒有其他版本紀錄。</div>}
+                {revisions.map((rev, idx) => (
+                  <div key={rev.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "7px 10px", borderBottom: idx < revisions.length - 1 ? "1px dashed var(--gold)" : "none", fontSize: 12 }}>
+                    <div>
+                      <div>{new Date(rev.modifiedTime).toLocaleString("zh-TW")}</div>
+                      {rev.lastModifyingUser && <div style={{ color: "var(--muted)" }}>{rev.lastModifyingUser.displayName || rev.lastModifyingUser.emailAddress}</div>}
+                      {idx === 0 && <div style={{ color: "var(--jade)", fontWeight: 700 }}>目前版本</div>}
+                    </div>
+                    {idx !== 0 && (
+                      <button onClick={() => handleRestore(rev)} disabled={restoringId === rev.id} style={{ ...miniBtnStyle, borderColor: "var(--seal)", color: "var(--seal)" }}>
+                        {restoringId === rev.id ? "還原中…" : "還原這個版本"}
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+            {revErr && <div style={{ fontSize: 12, color: "var(--seal)", marginTop: 6 }}>{revErr}</div>}
           </React.Fragment>
         ) : (
           <div style={{ fontSize: 12, color: "var(--muted)" }}>匯入功能僅開放給主管理者／副管理者使用。</div>
@@ -1329,6 +1432,11 @@ function App() {
   const handleImportData = async (mergedPersons, mergedRootIds) => {
     await persistAll(mergedPersons, mergedRootIds, null);
     setCollapsed(computeDefaultCollapsed(mergedPersons, mergedRootIds));
+  };
+
+  const handleRestoreRevision = async (oldData) => {
+    await persistAll(oldData.persons, oldData.rootIds, oldData.roles || roles);
+    setCollapsed(computeDefaultCollapsed(oldData.persons, oldData.rootIds));
   };
 
   // 搜尋時：自動展開比對到的人物的所有祖先節點，並捲動到該卡片
@@ -1670,8 +1778,10 @@ function App() {
         <ImportExportPanel
           persons={persons} rootIds={rootIds} roles={roles}
           canImport={!!session && (session.role === "master" || session.role === "sub")}
+          fileId={CONFIG.FILE_ID} accessToken={accessToken}
           onClose={() => setShowImportExport(false)}
           onImportData={handleImportData}
+          onRestoreRevision={handleRestoreRevision}
         />
       )}
 
