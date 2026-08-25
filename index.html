@@ -279,12 +279,16 @@ function personToMarkdown(id, persons, depth) {
   const children = Object.values(persons).filter((c) => c.parentId === id).sort((a, b) => a.childOrder - b.childOrder);
   const spouses = (p.spouseIds || []).map((sid) => persons[sid]).filter(Boolean);
   let out = `${indent}- **${p.name}**\n`;
+  if (p.formalName) out += `${indent}  - 諱名：${p.formalName}\n`;
+  if (p.courtesyName) out += `${indent}  - 字：${p.courtesyName}\n`;
+  if (p.artName) out += `${indent}  - 號：${p.artName}\n`;
   out += `${indent}  - 出生日期：${personBirthLineMd(p)}\n`;
   if (p.deathNote) out += `${indent}  - 卒亡／享壽：${p.deathNote}\n`;
   if (p.generationChar) out += `${indent}  - 字輩：${p.generationChar}\n`;
   if (p.burialPlace) out += `${indent}  - 墓葬地：${p.burialPlace}\n`;
   if (p.migrationNote) out += `${indent}  - 遷徙紀錄：${p.migrationNote}\n`;
   if (p.note) out += `${indent}  - 備註：${p.note}\n`;
+  if (p.sourceNote) out += `${indent}  - 資料來源／考據：${p.sourceNote}\n`;
   if (spouses.length > 0) {
     out += `${indent}  - 配偶：\n`;
     spouses.forEach((s) => {
@@ -697,10 +701,18 @@ function PersonCard({ p, persons, canEditFn, onEdit, onAddChild, onAddSpouse, on
         {p.generationChar && <span style={{ fontSize: 11, color: "var(--jade)", fontWeight: 700, border: "1px solid var(--jade)", borderRadius: 4, padding: "1px 5px" }}>字輩：{p.generationChar}</span>}
         {canEdit && <button onClick={() => onEdit(p.id)} title="編輯" style={iconBtnStyle}>✎</button>}
       </div>
+      {(p.formalName || p.courtesyName || p.artName) && (
+        <div style={{ marginTop: 2, fontSize: 12, color: "var(--muted)" }}>
+          {p.formalName && <span>諱：{p.formalName}　</span>}
+          {p.courtesyName && <span>字：{p.courtesyName}　</span>}
+          {p.artName && <span>號：{p.artName}</span>}
+        </div>
+      )}
       <div style={{ marginTop: 6 }}><BirthLine p={p} /></div>
       {p.note && <div style={{ marginTop: 4, fontSize: 12, color: "var(--muted)", fontStyle: "italic" }}>備註：{p.note}</div>}
       {p.burialPlace && <div style={{ marginTop: 2, fontSize: 12, color: "var(--muted)" }}>墓葬地：{p.burialPlace}</div>}
       {p.migrationNote && <div style={{ marginTop: 2, fontSize: 12, color: "var(--muted)" }}>遷徙：{p.migrationNote}</div>}
+      {p.sourceNote && <div style={{ marginTop: 2, fontSize: 11, color: "var(--muted)", fontStyle: "italic" }}>考據來源：{p.sourceNote}</div>}
       {spouses.length > 0 && (
         <div style={{ marginTop: 8, borderTop: "1px dashed var(--gold)", paddingTop: 6 }}>
           {spouses.map((s) => (
@@ -823,6 +835,9 @@ function PersonForm({ mode, initial, onCancel, onSave, onDelete, allPersons, per
           <button onClick={onCancel} style={iconBtnStyle}>✕</button>
         </div>
         <FormRow label="姓名"><input style={inputStyle} value={f.name} onChange={set("name")} /></FormRow>
+        <FormRow label="諱名（本名／族譜正式全名）"><input style={inputStyle} placeholder="例：某某公諱XX" value={f.formalName || ""} onChange={set("formalName")} /></FormRow>
+        <FormRow label="字（成年後所取之字）"><input style={inputStyle} value={f.courtesyName || ""} onChange={set("courtesyName")} /></FormRow>
+        <FormRow label="號（別號、雅號）"><input style={inputStyle} value={f.artName || ""} onChange={set("artName")} /></FormRow>
         <FormRow label="性別">
           <select style={inputStyle} value={f.gender} onChange={set("gender")}><option value="M">男</option><option value="F">女</option></select>
         </FormRow>
@@ -859,6 +874,7 @@ function PersonForm({ mode, initial, onCancel, onSave, onDelete, allPersons, per
         <FormRow label="墓葬地"><input style={inputStyle} placeholder="例：xx鄉xx公墓" value={f.burialPlace || ""} onChange={set("burialPlace")} /></FormRow>
         <FormRow label="遷徙紀錄"><input style={inputStyle} placeholder="例：民國40年遷居台北" value={f.migrationNote || ""} onChange={set("migrationNote")} /></FormRow>
         <FormRow label="其他備註"><input style={inputStyle} placeholder="例：過繼給...作為第四子" value={f.note || ""} onChange={set("note")} /></FormRow>
+        <FormRow label="資料來源／考據"><input style={inputStyle} placeholder="例：根據某某族譜手抄本第5頁" value={f.sourceNote || ""} onChange={set("sourceNote")} /></FormRow>
         <div style={{ display: "flex", justifyContent: "space-between", marginTop: 16 }}>
           {mode === "edit" && onDelete ? <button onClick={onDelete} style={{ ...miniBtnStyle, borderColor: "var(--seal)", color: "var(--seal)" }}>🗑 刪除</button> : <span />}
           <div style={{ display: "flex", gap: 8 }}>
