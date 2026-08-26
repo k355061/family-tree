@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>家族樹狀圖</title>
+<title>馬氏源流譜</title>
 <script src="https://accounts.google.com/gsi/client" async defer></script>
 <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -329,7 +329,7 @@ function personToMarkdown(id, persons, depth) {
 
 function exportToMarkdown(persons, rootIds) {
   const roots = rootIds.map((id) => persons[id]).filter(Boolean).sort((a, b) => (a.birthAdYear || 0) - (b.birthAdYear || 0));
-  let md = `# 家族樹狀圖\n\n匯出時間：${new Date().toLocaleString("zh-TW")}\n\n`;
+  let md = `# 馬氏源流譜\n\n匯出時間：${new Date().toLocaleString("zh-TW")}\n\n`;
   roots.forEach((root) => {
     if (root.generationEra) md += `## ${root.generationEra}\n\n`;
     md += personToMarkdown(root.id, persons, 0) + "\n";
@@ -882,7 +882,7 @@ function PrintPreviewOverlay({ rootsByEra, persons, generationMap, onClose }) {
       </div>
       <div id="print-content" style={{ maxWidth: 794, margin: "20px auto", background: "#F6F1E4", boxShadow: "0 4px 20px rgba(0,0,0,0.35)" }}>
         <div className="print-page" style={{ padding: "25% 40px", textAlign: "center", fontFamily: "var(--font-display)" }}>
-          <div style={{ fontSize: 28, fontWeight: 700, color: "#241F1A", letterSpacing: 6 }}>家族族譜</div>
+          <div style={{ fontSize: 28, fontWeight: 700, color: "#241F1A", letterSpacing: 6 }}>馬氏源流譜</div>
           <div style={{ width: 40, height: 1, background: "#A8823C", margin: "20px auto" }} />
           <div style={{ fontSize: 13, color: "#7C7264" }}>匯出日期：{new Date().toLocaleDateString("zh-TW")}</div>
         </div>
@@ -1760,7 +1760,7 @@ function App() {
       <div style={{ position: "sticky", top: 0, zIndex: 30, background: "var(--paper)", boxShadow: "0 1px 0 var(--gold)", padding: "18px 14px 0" }}>
         <header style={{ maxWidth: 980, margin: "0 auto 18px" }}>
           <div style={{ display: "flex", alignItems: "baseline", gap: 10, flexWrap: "wrap" }}>
-            <h1 style={{ fontFamily: "var(--font-display)", fontSize: 26, fontWeight: 900, margin: 0, letterSpacing: 2 }}>家族樹狀圖</h1>
+            <h1 style={{ fontFamily: "var(--font-display)", fontSize: 26, fontWeight: 900, margin: 0, letterSpacing: 2 }}>馬氏源流譜</h1>
             <span style={{ fontSize: 12, color: "var(--muted)" }}>族譜線上維護與展示</span>
           </div>
           <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
