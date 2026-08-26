@@ -107,7 +107,7 @@ const CONFIG = {
   // 第一次部署時留空；用主管理者身份登入後，畫面會引導你建立資料檔案，
   // 建立完成後把顯示出來的 File ID 貼在這裡，然後重新推上 GitHub。
   FILE_ID: "1kes6aBUs7FFNHuCnWSzCP3ro1386abto",
-  SCOPES: "https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/userinfo.email",
+  SCOPES: "https://www.googleapis.com/auth/drive https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile",
 };
 
 /* ===========================================================
@@ -1033,7 +1033,7 @@ function AddParentForm({ otherRoots, onCancel, onCreateNew, onAttachExisting }) 
 /* ===========================================================
    登入 / 角色管理（改為 Google 帳號版）
 =========================================================== */
-function AuthPanel({ roles, session, signedInEmail, onSignIn, onSignOut, onClaimMaster, onManage }) {
+function AuthPanel({ roles, session, signedInEmail, signedInName, onSignIn, onSignOut, onClaimMaster, onManage }) {
   if (!roles) return <div style={{ fontSize: 13, color: "var(--muted)" }}>載入中…</div>;
 
   if (!signedInEmail) {
@@ -1048,7 +1048,7 @@ function AuthPanel({ roles, session, signedInEmail, onSignIn, onSignOut, onClaim
   if (!roles.masterEmail) {
     return (
       <div style={{ fontSize: 13 }}>
-        <div style={{ marginBottom: 6, color: "var(--muted)" }}>已用 {signedInEmail} 登入。尚未設定主管理者：</div>
+        <div style={{ marginBottom: 6, color: "var(--muted)" }}>已用 {signedInName || signedInEmail} 登入。尚未設定主管理者：</div>
         <button onClick={onClaimMaster} style={{ ...miniBtnStyle, background: "var(--seal)", color: "var(--paper)", borderColor: "var(--seal)" }}>將此帳號設為主管理者</button>
       </div>
     );
@@ -1056,7 +1056,7 @@ function AuthPanel({ roles, session, signedInEmail, onSignIn, onSignOut, onClaim
 
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13, flexWrap: "wrap" }}>
-      <span>{signedInEmail}（{roleLabel(session ? session.role : null)}）</span>
+      <span title={signedInEmail}>{signedInName || signedInEmail}（{roleLabel(session ? session.role : null)}）</span>
       {session && session.role === "master" && <button onClick={onManage} style={miniBtnStyle}>管理者設定</button>}
       <button onClick={onSignOut} style={miniBtnStyle}>登出</button>
     </div>
@@ -1336,6 +1336,7 @@ function App() {
   const [rootIds, setRootIds] = useState([]);
   const [roles, setRoles] = useState(null);
   const [signedInEmail, setSignedInEmail] = useState(null);
+  const [signedInName, setSignedInName] = useState(null);
   const [accessToken, setAccessToken] = useState(null);
   const [session, setSession] = useState(null); // { role }
   const [viewMode, setViewMode] = useState("tree");
@@ -1375,6 +1376,7 @@ function App() {
                 headers: { Authorization: `Bearer ${resp.access_token}` },
               }).then((r) => r.json());
               setSignedInEmail(info.email);
+              setSignedInName(info.name || info.email);
             } catch (e) { setLoadErr("取得帳號資訊失敗"); }
           },
         });
@@ -1385,7 +1387,7 @@ function App() {
   }, []);
 
   const signIn = () => tokenClientRef.current && tokenClientRef.current.requestAccessToken();
-  const signOut = () => { setAccessToken(null); setSignedInEmail(null); setSession(null); };
+  const signOut = () => { setAccessToken(null); setSignedInEmail(null); setSignedInName(null); setSession(null); };
 
   // 讀取資料（有 FILE_ID 才讀）
   useEffect(() => {
@@ -1763,7 +1765,7 @@ function App() {
           </div>
           <div style={{ marginTop: 10, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
             <AuthPanel
-              roles={roles} session={session} signedInEmail={signedInEmail}
+              roles={roles} session={session} signedInEmail={signedInEmail} signedInName={signedInName}
               onSignIn={signIn} onSignOut={signOut}
               onClaimMaster={handleClaimMaster}
               onManage={() => setShowManage(true)}
